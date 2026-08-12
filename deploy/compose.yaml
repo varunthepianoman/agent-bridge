@@ -1,0 +1,70 @@
+services:
+  nats:
+    image: nats:2.11-alpine
+    restart: unless-stopped
+    command: ["-c", "/etc/nats/nats-server.conf"]
+    environment:
+      NATS_ADMIN_USER: ${NATS_ADMIN_USER:-bridge-admin}
+      NATS_ADMIN_PASSWORD: ${NATS_ADMIN_PASSWORD:?set NATS_ADMIN_PASSWORD}
+      NATS_CATALOG_USER: ${NATS_CATALOG_USER:-catalog}
+      NATS_CATALOG_PASSWORD: ${NATS_CATALOG_PASSWORD:?set NATS_CATALOG_PASSWORD}
+      NATS_NODE_A_USER: ${NATS_NODE_A_USER:-node-a}
+      NATS_NODE_A_PASSWORD: ${NATS_NODE_A_PASSWORD:?set NATS_NODE_A_PASSWORD}
+      NATS_NODE_B_USER: ${NATS_NODE_B_USER:-node-b}
+      NATS_NODE_B_PASSWORD: ${NATS_NODE_B_PASSWORD:?set NATS_NODE_B_PASSWORD}
+    volumes:
+      - ./nats/nats-server.conf:/etc/nats/nats-server.conf:ro
+      - nats-state:/data/jetstream
+    networks: [catalog-private]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8222/healthz?js-enabled-only=true"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  catalog-api:
+    build:
+      context: ..
+      dockerfile: deploy/catalog-api.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      AGENT_BRIDGE_DATABASE_URL: sqlite:////var/lib/agent-bridge/catalog.db
+      AGENT_BRIDGE_STATE_DIR: /var/lib/agent-bridge
+      AGENT_BRIDGE_NODE_ID: ${AGENT_BRIDGE_HUB_NODE_ID:-catalog-hub}
+      AGENT_BRIDGE_ENVIRONMENT_ID: hub
+      AGENT_BRIDGE_NATIVE_LAUNCH: "0"
+      AGENT_BRIDGE_NATS_SERVERS: nats://nats:4222
+      AGENT_BRIDGE_NATS_USERNAME: ${NATS_CATALOG_USER:-catalog}
+      AGENT_BRIDGE_NATS_PASSWORD: ${NATS_CATALOG_PASSWORD:?set NATS_CATALOG_PASSWORD}
+      AGENT_BRIDGE_RESULT_CONSUMER: catalog-execution-results-v1
+    volumes:
+      - catalog-state:/var/lib/agent-bridge
+    networks: [catalog-private]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:58081/api/v1/health')"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+
+  catalog-web:
+    build:
+      context: ..
+      dockerfile: deploy/catalog-web.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      catalog-api:
+        condition: service_healthy
+    ports:
+      - "${AGENT_BRIDGE_HUB_BIND:-127.0.0.1}:${AGENT_BRIDGE_HUB_PORT:-58080}:8080"
+    networks: [catalog-private]
+
+networks:
+  catalog-private:
+    internal: true
+
+volumes:
+  catalog-state:
+  nats-state:

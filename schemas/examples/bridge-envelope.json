@@ -1,0 +1,25 @@
+{
+  "schema_version": "agent-bridge/v1",
+  "message_id": "msg-contract-example",
+  "kind": "request",
+  "sender": {
+    "kind": "conversation",
+    "id": "conv-user"
+  },
+  "destination": {
+    "kind": "capability",
+    "id": "robot-test"
+  },
+  "body": {
+    "instruction": "Run reconnect validation"
+  },
+  "correlation_id": "corr-contract-example",
+  "delivery": {
+    "max_attempts": 3,
+    "retry_backoff_seconds": 5,
+    "acknowledgement_timeout_seconds": 60
+  },
+  "artifacts": [],
+  "extensions": {}
+}
+

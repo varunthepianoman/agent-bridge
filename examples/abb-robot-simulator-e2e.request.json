@@ -1,0 +1,23 @@
+{
+  "request": {
+    "operation": "invoke_adapter",
+    "instruction": "Run the fail-closed ABB RobotStudio simulator end-to-end validation and return the structured result.",
+    "target": {
+      "kind": "capability",
+      "id": "robot-simulator-e2e"
+    },
+    "work_id": "work-arci-v2",
+    "adapter": "robot-simulator-e2e",
+    "parameters": {},
+    "delivery": {
+      "max_attempts": 3,
+      "retry_backoff_seconds": 30,
+      "acknowledgement_timeout_seconds": 900
+    }
+  },
+  "envelope": {
+    "extensions": {
+      "abb.test_suite": "simulator-e2e"
+    }
+  }
+}

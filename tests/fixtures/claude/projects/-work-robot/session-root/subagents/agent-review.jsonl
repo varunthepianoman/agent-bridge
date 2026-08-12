@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"session-root","agentId":"review","isSidechain":true,"cwd":"/work/robot","gitBranch":"feature/reconnect","timestamp":"2025-01-01T00:00:01Z","message":{"role":"user","content":"Audit the plan"}}
+{"type":"assistant","sessionId":"session-root","agentId":"review","isSidechain":true,"cwd":"/work/robot","gitBranch":"feature/reconnect","timestamp":"2025-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"SECRET_REASONING"},{"type":"text","text":"The plan needs a restart test."}]}}

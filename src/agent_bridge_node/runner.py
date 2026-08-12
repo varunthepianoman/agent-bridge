@@ -1,0 +1,152 @@
+"""Explicit native actions requested by the Catalog hub."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+from pathlib import Path
+from typing import Any, Literal, Protocol
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class NodeCommand(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    command_id: str = Field(min_length=1)
+    claim_token: str = Field(min_length=1)
+    kind: Literal["resume_conversation", "open_path"]
+    environment_id: str = Field(min_length=1)
+    conversation_id: str | None = None
+    provider: str = "codex"
+    provider_thread_id: str | None = None
+    workspace: str | None = None
+    path: str | None = None
+
+
+class CommandResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    command_id: str
+    claim_token: str
+    status: Literal["succeeded", "failed", "cancelled"]
+    detail: str | None = None
+    output: dict[str, Any] = Field(default_factory=dict)
+    launched_command: list[str] | None = Field(default=None, exclude=True)
+
+
+class ProcessLauncher(Protocol):
+    def launch(self, argv: list[str]) -> None: ...
+
+
+class SystemProcessLauncher:
+    def launch(self, argv: list[str]) -> None:
+        subprocess.Popen(argv, start_new_session=os.name != "nt")
+
+
+class NativeCommandRunner:
+    def __init__(
+        self,
+        *,
+        environment_id: str,
+        enabled: bool,
+        codex_bin: str = "codex",
+        claude_bin: str = "claude",
+        platform_name: str | None = None,
+        launcher: ProcessLauncher | None = None,
+    ) -> None:
+        self.environment_id = environment_id
+        self.enabled = enabled
+        self.codex_bin = codex_bin
+        self.claude_bin = claude_bin
+        self.platform_name = platform_name or ("windows" if os.name == "nt" else "linux")
+        self.launcher = launcher or SystemProcessLauncher()
+
+    def execute(self, request: NodeCommand) -> CommandResult:
+        if request.environment_id != self.environment_id:
+            return self._failure(
+                request, f"environment {request.environment_id!r} is not available on this node"
+            )
+        if not self.enabled:
+            return self._failure(request, "native actions are disabled on this node")
+        if request.kind == "resume_conversation":
+            return self._resume(request)
+        return self._open(request)
+
+    def _resume(self, request: NodeCommand) -> CommandResult:
+        if request.provider not in {"codex", "claude"}:
+            return self._failure(request, f"provider {request.provider!r} is not supported")
+        if not request.provider_thread_id:
+            return self._failure(request, "resume command has no provider thread id")
+        if not request.workspace:
+            return self._failure(request, "resume command has no workspace")
+        workspace = Path(request.workspace)
+        if not workspace.is_dir():
+            return self._failure(request, f"workspace is unavailable: {workspace}")
+        if request.provider == "claude":
+            session_id = request.provider_thread_id.split(":agent:", 1)[0]
+            provider_argv = [self.claude_bin, "--resume", session_id]
+        else:
+            provider_argv = [
+                self.codex_bin,
+                "resume",
+                request.provider_thread_id,
+                "-C",
+                str(workspace),
+            ]
+        platform = self.platform_name.casefold()
+        if platform.startswith("win"):
+            argv = ["wt.exe", "-d", str(workspace), *provider_argv]
+        elif platform == "wsl":
+            argv = ["wt.exe", "wsl.exe", "--cd", str(workspace), "--", *provider_argv]
+        elif platform == "linux":
+            if request.provider == "claude":
+                argv = [
+                    "x-terminal-emulator",
+                    "-e",
+                    "env",
+                    f"--chdir={workspace}",
+                    *provider_argv,
+                ]
+            else:
+                argv = ["x-terminal-emulator", "-e", *provider_argv]
+        else:
+            return self._failure(request, f"platform {self.platform_name!r} is unsupported")
+        return self._launch(request, argv, f"{request.provider.title()} conversation launched")
+
+    def _open(self, request: NodeCommand) -> CommandResult:
+        if not request.path:
+            return self._failure(request, "open command has no path")
+        target = Path(request.path)
+        if not target.exists():
+            return self._failure(request, f"path is unavailable: {target}")
+        if self.platform_name.casefold().startswith("win"):
+            argv = ["explorer.exe", str(target)]
+        elif self.platform_name.casefold() in {"linux", "wsl"}:
+            argv = ["xdg-open", str(target)]
+        else:
+            return self._failure(request, f"platform {self.platform_name!r} is unsupported")
+        return self._launch(request, argv, "Path opened")
+
+    def _launch(self, request: NodeCommand, argv: list[str], detail: str) -> CommandResult:
+        try:
+            self.launcher.launch(argv)
+        except OSError as error:
+            return self._failure(request, f"native launch failed: {error}")
+        return CommandResult(
+            command_id=request.command_id,
+            claim_token=request.claim_token,
+            status="succeeded",
+            detail=detail,
+            output={"launched": True},
+            launched_command=argv,
+        )
+
+    @staticmethod
+    def _failure(request: NodeCommand, detail: str) -> CommandResult:
+        return CommandResult(
+            command_id=request.command_id,
+            claim_token=request.claim_token,
+            status="failed",
+            detail=detail,
+        )

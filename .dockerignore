@@ -1,0 +1,9 @@
+.git
+.venv
+.pytest_cache
+.mypy_cache
+.ruff_cache
+catalog-web/node_modules
+catalog-web/dist
+**/__pycache__
+*.db

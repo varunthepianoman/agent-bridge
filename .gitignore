@@ -1,5 +1,17 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+dist/
+build/
+catalog-web/node_modules/
+catalog-web/dist/
+deploy/.env
+*.db
+*.db-shm
+*.db-wal
 token.txt
 messages.jsonl
