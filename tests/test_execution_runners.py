@@ -255,7 +255,7 @@ async def test_codex_adapter_resume_keeps_environment_and_denies_foreground_appr
 
     fake_sdk = SimpleNamespace(
         AsyncCodex=FakeCodex,
-        Sandbox=SimpleNamespace(workspace_write="workspace"),
+        Sandbox=SimpleNamespace(full_access="full"),
         ApprovalMode=SimpleNamespace(deny_all="deny"),
     )
     real_import = __import__("importlib").import_module
@@ -276,7 +276,7 @@ async def test_codex_adapter_resume_keeps_environment_and_denies_foreground_appr
     assert output.output["provider_thread_id"] == "thread-1"
     assert output.output["cwd"] == str(tmp_path)
     assert captured["options"] == {
-        "sandbox": "workspace",
+        "sandbox": "full",
         "approval_mode": "deny",
         "model": "model-a",
         "config": {"sandbox_workspace_write": {"network_access": True}},

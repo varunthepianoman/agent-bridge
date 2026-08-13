@@ -15,6 +15,7 @@ from agent_bridge_coordinator.models import (
     CoordinatorAction,
     CoordinatorActionType,
 )
+from agent_bridge_bridge.subjects import capability_subject
 from agent_bridge_protocol.models import (
     CoordinatorIntakeStatus,
     CoordinatorRole,
@@ -127,7 +128,12 @@ class BridgeCoordinatorActionExecutor:
                         "action_type": str(action.type),
                     },
                 },
-            }
+            },
+            # The execution target preserves the logical role/node identity, while
+            # adapter work is physically routed to a runner advertising the authorized
+            # capability. Without this override, role-targeted adapter requests wait on
+            # a role inbox that capability runners do not consume.
+            custom_subject=capability_subject(action.capability),
         )
         message = result["message"]
         if message.get("status") != "published":

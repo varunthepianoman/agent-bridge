@@ -44,7 +44,14 @@ class ConvergenceController:
         request = execution.get("request")
         parameters = request.get("parameters") if isinstance(request, dict) else None
         stage = parameters.get("stage") if isinstance(parameters, dict) else None
-        if stage not in {"implementation", "audit"}:
+        if stage not in {
+            "review_intake",
+            "review_intake_and_plan",
+            "implementation",
+            "audit",
+            "draft_replies",
+            "publish",
+        }:
             return
 
         status = envelope.body.get("status")
@@ -57,6 +64,23 @@ class ConvergenceController:
         output = envelope.body.get("output")
         response = output.get("final_response") if isinstance(output, dict) else ""
         response = response if isinstance(response, str) else ""
+        if stage in {"review_intake", "review_intake_and_plan"}:
+            state["status"] = "awaiting_user_implementation_approval"
+            self._persist(work.work_id, extensions, policy, state)
+            return
+        if stage == "draft_replies":
+            if bool(policy.get("publish_gate_required", True)):
+                state["status"] = "awaiting_publish_approval"
+                self._persist(work.work_id, extensions, policy, state)
+                return
+            state["status"] = "publishing"
+            self._persist(work.work_id, extensions, policy, state)
+            await self._dispatch_publish(work.work_id, policy)
+            return
+        if stage == "publish":
+            state["status"] = "completed"
+            self._persist(work.work_id, extensions, policy, state)
+            return
         if stage == "implementation":
             state["status"] = "awaiting_audit"
             self._persist(work.work_id, extensions, policy, state)
@@ -76,8 +100,23 @@ class ConvergenceController:
 
         verdict = _audit_verdict(response)
         if verdict == "accepted":
-            state["status"] = "accepted"
+            state["status"] = "preparing_publish_package"
             self._persist(work.work_id, extensions, policy, state)
+            await self._dispatch(
+                work_id=work.work_id,
+                role_id=str(policy["developer_role_id"]),
+                stage="draft_replies",
+                instruction=(
+                    "The auditor accepted the implementation. Prepare the complete local "
+                    "publish package: verify the final diff and tests, create one local commit "
+                    "per review-thread topic, and draft the exact GitHub review-thread replies. "
+                    "Each draft reply must identify and link the commit hash for its topic so "
+                    "the reviewer can inspect that isolated change directly. Do not push, post, "
+                    "reply, resolve threads, or make "
+                    "any other remote change. Report the commit SHA, test evidence, and exact "
+                    "draft replies for the single publish gate. If blocked, begin with `Blocked`."
+                ),
+            )
             return
         if verdict != "changes_requested":
             state.update({"status": "blocked", "blocked_stage": "audit_verdict"})
@@ -103,8 +142,101 @@ class ConvergenceController:
             ),
         )
 
+    async def approve_implementation(self, work_id: str) -> dict[str, Any]:
+        work = self.roles.get_work(work_id)
+        if work is None:
+            raise LookupError(f"work item not found: {work_id}")
+        extensions = dict(work.extensions)
+        policy = extensions.get("agent_bridge.convergence")
+        if not isinstance(policy, dict) or not policy.get("enabled"):
+            raise ValueError("convergence workflow is not enabled")
+        state = dict(policy.get("state") or {})
+        if state.get("status") != "awaiting_user_implementation_approval":
+            raise ValueError(
+                "implementation gate is not ready; current state is "
+                f"{state.get('status', 'unknown')}"
+            )
+        state.update({"status": "implementing", "implementation_approved": True})
+        self._persist(work_id, extensions, policy, state)
+        try:
+            await self._dispatch(
+                work_id=work_id,
+                role_id=str(policy["developer_role_id"]),
+                stage="implementation",
+                instruction=(
+                    "The user approved the implementation proposal recorded during review "
+                    "intake. Execute that approved plan now, including its documented scope, "
+                    "tests, and local commit policy. Update the canonical review documents "
+                    "with accurate after-state evidence. This authorizes local code and "
+                    "documentation edits, tests, and local commits only. Do not push, post or "
+                    "reply on GitHub, submit a review, resolve threads, or make any other "
+                    "remote change. If blocked, begin with `Blocked` and explain why."
+                ),
+            )
+        except Exception:
+            state.update(
+                {
+                    "status": "awaiting_user_implementation_approval",
+                    "implementation_approved": False,
+                }
+            )
+            self._persist(work_id, extensions, policy, state)
+            raise
+        return {"work_id": work_id, "status": "implementing"}
+
+    async def approve_publish(self, work_id: str) -> dict[str, Any]:
+        work = self.roles.get_work(work_id)
+        if work is None:
+            raise LookupError(f"work item not found: {work_id}")
+        extensions = dict(work.extensions)
+        policy = extensions.get("agent_bridge.convergence")
+        if not isinstance(policy, dict) or not policy.get("enabled"):
+            raise ValueError("convergence workflow is not enabled")
+        state = dict(policy.get("state") or {})
+        if state.get("status") != "awaiting_publish_approval":
+            raise ValueError(
+                f"publish gate is not ready; current state is {state.get('status', 'unknown')}"
+            )
+        state["status"] = "publishing"
+        self._persist(work_id, extensions, policy, state)
+        try:
+            await self._dispatch_publish(work_id, policy)
+        except Exception:
+            state["status"] = "awaiting_publish_approval"
+            self._persist(work_id, extensions, policy, state)
+            raise
+        return {"work_id": work_id, "status": "publishing"}
+
+    async def _dispatch_publish(self, work_id: str, policy: dict[str, Any]) -> None:
+        gate_required = bool(policy.get("publish_gate_required", True))
+        authorization = (
+            "The user approved the single publish gate."
+            if gate_required
+            else "This work item's publish policy authorizes automatic publishing."
+        )
+        await self._dispatch(
+            work_id=work_id,
+            role_id=str(policy["developer_role_id"]),
+            stage="publish",
+            remote_write_authorized=True,
+            instruction=(
+                f"{authorization} Re-verify the intended repository, branch, authenticated "
+                "GitHub identity, local commit, and exact drafted replies. Then push the "
+                "approved code and post the drafted GitHub review-thread replies. Do not "
+                "expand scope or alter the approved substance. Report every remote action "
+                "and link. If any verification fails, begin with `Blocked` and make no "
+                "further remote changes."
+            ),
+        )
+
     async def _dispatch(
-        self, *, work_id: str, role_id: str, stage: str, instruction: str
+        self,
+        *,
+        work_id: str,
+        role_id: str,
+        stage: str,
+        instruction: str,
+        remote_write_authorized: bool = False,
     ) -> None:
         role = self.roles.get_role(role_id)
         if role is None:
@@ -130,7 +262,7 @@ class ConvergenceController:
                     "agent_bridge.workflow": {
                         "stage": stage,
                         "role_id": role_id,
-                        "remote_write_authorized": False,
+                        "remote_write_authorized": remote_write_authorized,
                     }
                 },
             }

@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from .db import (
     BrokerConsumerStateRow,
@@ -59,6 +60,16 @@ class BrokerProjectionStore:
                     payload_summary_json=_json(payload_summary or {}),
                 )
                 session.add(row)
+                try:
+                    # Multiple durable consumers may observe the same message during
+                    # startup replay. Materialization is an idempotent projection, so
+                    # let the concurrent insert win and continue by updating that row.
+                    session.flush()
+                except IntegrityError:
+                    session.rollback()
+                    row = session.get(BrokerMessageRow, message_id)
+                    if row is None:
+                        raise
             if now >= _utc(row.last_observed_at):
                 row.subject = subject
                 if message_type is not None:

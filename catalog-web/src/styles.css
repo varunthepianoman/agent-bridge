@@ -54,7 +54,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 kbd { padding: 2px 6px; border: 1px solid #29343b; border-bottom-color: #3b494f; border-radius: 4px; color: var(--faint); background: #151d22; font: 10px 'JetBrains Mono', monospace; }
 .secondary-button, .primary-button { height: 36px; padding: 0 13px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .secondary-button:hover { border-color: #394950; background: var(--panel-3); }
-.primary-button { color: #07110f; border-color: #7ccaba; background: var(--accent); }
+.primary-button { color: #07110f; border-color: #7ccaba; background: var(--accent); text-decoration: none; }
 .primary-button:hover { background: var(--accent-strong); }
 .primary-button:disabled, .secondary-button:disabled { opacity: .45; cursor: default; }
 .compact { height: 31px; padding: 0 10px; font-size: 11px; }

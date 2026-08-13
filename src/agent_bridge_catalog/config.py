@@ -24,6 +24,7 @@ class Settings:
     codex_bin: str = "codex"
     native_launch_enabled: bool = False
     nats_servers: tuple[str, ...] = ()
+    broker_required: bool = False
     nats_credentials_file: Path | None = None
     nats_username: str | None = None
     nats_password: str | None = None
@@ -38,6 +39,10 @@ class Settings:
     telemetry_interval_seconds: float = 30.0
 
     def __post_init__(self) -> None:
+        if self.broker_required and not self.nats_servers:
+            raise ValueError(
+                "broker is required but AGENT_BRIDGE_NATS_SERVERS is not configured"
+            )
         if (self.nats_username is None) != (self.nats_password is None):
             raise ValueError("NATS username and password must be configured together")
         if self.nats_credentials_file and self.nats_username:
@@ -65,6 +70,7 @@ class Settings:
             codex_bin=os.environ.get("AGENT_BRIDGE_CODEX_BIN", "codex"),
             native_launch_enabled=os.environ.get("AGENT_BRIDGE_NATIVE_LAUNCH", "0") == "1",
             nats_servers=servers,
+            broker_required=os.environ.get("AGENT_BRIDGE_BROKER_REQUIRED", "0") == "1",
             nats_credentials_file=Path(credentials) if credentials else None,
             nats_username=os.environ.get("AGENT_BRIDGE_NATS_USERNAME"),
             nats_password=os.environ.get("AGENT_BRIDGE_NATS_PASSWORD"),

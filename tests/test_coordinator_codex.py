@@ -77,7 +77,7 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> Any:
     sdk = SimpleNamespace(
         AsyncCodex=FakeCodex,
         ApprovalMode=SimpleNamespace(deny_all="deny"),
-        Sandbox=SimpleNamespace(workspace_write="workspace"),
+        Sandbox=SimpleNamespace(full_access="full"),
     )
     monkeypatch.setattr("agent_bridge_coordinator.codex.importlib.import_module", lambda _name: sdk)
     return sdk
@@ -94,8 +94,19 @@ async def test_codex_coordinator_uses_schema_deny_all_and_tracks_usage(fake_sdk:
     turn = await model.run(session, "context")
     instance = FakeCodex.instances[0]
     assert instance.options["approval_mode"] == "deny"
+    assert instance.options["sandbox"] == "full"
     assert instance.thread is not None
     assert "output_schema" in instance.thread.run_options
+    schema = instance.thread.run_options["output_schema"]
+    assert schema["required"] == ["checkpoint", "actions", "attention_required"]
+    assert schema["$defs"]["ArtifactRef"]["required"] == list(
+        schema["$defs"]["ArtifactRef"]["properties"]
+    )
+    payload = schema["$defs"]["CoordinatorAction"]["properties"]["payload"]
+    assert payload["additionalProperties"] is False
+    assert payload["required"] == list(payload["properties"])
+    assert payload["properties"]["target"]["anyOf"][0]["additionalProperties"] is False
+    assert "default" not in schema["properties"]["attention_required"]
     assert turn.usage.total_tokens == 15
     assert instance.closed
 

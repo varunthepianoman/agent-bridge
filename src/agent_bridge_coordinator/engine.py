@@ -568,6 +568,8 @@ class CoordinatorEngine:
         return (
             "Act as the durable coordinator role described below. Return only the strict "
             "structured response requested by the supplied JSON Schema. Preserve charter and "
-            "authority; surface uncertainty and meaningful scope expansion for approval.\n"
+            "authority; surface uncertainty and meaningful scope expansion for approval. "
+            "Set checkpoint.objective to the request.objective string exactly, without "
+            "paraphrasing, shortening, or normalizing it.\n"
             + json.dumps(context, sort_keys=True, separators=(",", ":"), default=str)
         )

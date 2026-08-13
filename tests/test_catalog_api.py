@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from agent_bridge_catalog.app import create_app
@@ -12,6 +13,7 @@ from agent_bridge_catalog.config import Settings
 class FakeProvider:
     def __init__(self) -> None:
         self.title = "Reconnect investigation"
+        self.thread_path: str | None = None
 
     async def discover(self, *, include_turns: bool = True) -> AsyncIterator[dict]:
         yield {
@@ -33,7 +35,10 @@ class FakeProvider:
             "commit_hash": "abc123",
             "created_at": 1_750_000_000,
             "last_activity_at": 1_750_000_100,
-            "raw_metadata": {"safe": "metadata"},
+            "raw_metadata": {
+                "safe": "metadata",
+                **({"path": self.thread_path} if self.thread_path else {}),
+            },
         }
         yield {
             "provider": "codex",
@@ -110,6 +115,71 @@ def test_catalog_metadata_survives_provider_resync(tmp_path: Path) -> None:
         assert after["title"] == "PR 17 reconnect root cause"
         assert after["provider_title"] == "Provider changed this title"
         assert after["pinned"] is True
+
+
+def test_local_codex_rollout_exposes_desktop_deep_link(tmp_path: Path) -> None:
+    provider = FakeProvider()
+    rollout = tmp_path / "rollout-thread-parent.jsonl"
+    rollout.write_text("{}\n")
+    provider.thread_path = str(rollout)
+
+    with make_client(tmp_path, provider) as client:
+        client.post("/api/v1/actions/sync", json={})
+        item = next(
+            row
+            for row in client.get("/api/v1/conversations").json()["items"]
+            if row["provider_thread_id"] == "thr-parent"
+        )
+
+    assert item["interactive_open"] == {
+        "desktop": {
+            "available": True,
+            "url": "codex://threads/thr-parent",
+            "reason": None,
+        },
+        "terminal": {
+            "available": True,
+            "command": "codex resume thr-parent -C /work/t_robotics",
+        },
+    }
+
+
+def test_machine_session_store_overrides_logical_runner_node(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    thread_id = "019ff8ab-bd8d-79f0-b474-e8c63694bc3e"
+    codex_home = tmp_path / "codex-home"
+    rollout_dir = codex_home / "sessions" / "2026" / "08" / "12"
+    rollout_dir.mkdir(parents=True)
+    (rollout_dir / f"rollout-2026-08-12T18-10-32-{thread_id}.jsonl").write_text("{}\n")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    settings = Settings(
+        state_dir=tmp_path,
+        database_url=f"sqlite:///{tmp_path / 'machine-store.db'}",
+        node_id="catalog-host",
+        environment_id="host",
+    )
+    app = create_app(settings=settings, provider=FakeProvider())
+
+    with TestClient(app) as client:
+        row = app.state.repository.upsert_discovered(
+            {
+                "provider": "codex",
+                "provider_thread_id": thread_id,
+                "cwd": "/work/pr1493",
+                "raw_metadata": {"execution_id": "exec-1"},
+            },
+            node_id="logical-runner-node",
+            environment_id="host",
+        )
+        item = client.get(f"/api/v1/conversations/{row.conversation_id}").json()
+
+    assert item["node_id"] == "logical-runner-node"
+    assert item["interactive_open"]["desktop"] == {
+        "available": True,
+        "url": f"codex://threads/{thread_id}",
+        "reason": None,
+    }
 
 
 def test_hide_filter_and_native_resume_command(tmp_path: Path) -> None:

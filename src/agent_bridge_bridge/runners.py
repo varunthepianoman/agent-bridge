@@ -239,7 +239,7 @@ class OpenAICodexClient:
         self,
         *,
         model: str | None = None,
-        sandbox: str = "workspace_write",
+        sandbox: str = "full_access",
         approval_mode: str = "deny_all",
         config: Mapping[str, Any] | None = None,
     ) -> None:

@@ -37,6 +37,14 @@ function renderCenter(onOpenManual = vi.fn()) {
   return onOpenManual
 }
 
+function renderCenterWithImplementationGate() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  render(<QueryClientProvider client={queryClient}><CoordinatorCenter workItems={[{
+    id: 'work-17', title: 'ARCI PR 17', status: 'active',
+    extensions: { 'agent_bridge.convergence': { state: { status: 'awaiting_user_implementation_approval' } } },
+  }]} onOpenManual={vi.fn()} /></QueryClientProvider>)
+}
+
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('CoordinatorCenter', () => {
@@ -81,6 +89,15 @@ describe('CoordinatorCenter', () => {
     fireEvent.click(screen.getByText('Submit to portfolio'))
     expect(await screen.findByRole('alert')).toHaveTextContent('explicit deadline and token or cost budget')
     expect(calls.filter((call) => call.init?.method === 'POST')).toHaveLength(0)
+  })
+
+  it('includes convergence implementation gates in the attention queue', async () => {
+    const calls = setupFetch()
+    renderCenterWithImplementationGate()
+    const approve = await screen.findByRole('button', { name: 'Approve implementation' })
+    expect(screen.getByText('awaiting implementation approval')).toBeInTheDocument()
+    fireEvent.click(approve)
+    await waitFor(() => expect(calls.some((call) => call.init?.method === 'POST' && call.url.includes('/convergence/approve-implementation'))).toBe(true))
   })
 })
 

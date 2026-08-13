@@ -104,6 +104,10 @@ def test_operational_overview_lists_pending_artifacts_roles_nodes_and_diagnostic
         advisories = client.get("/api/v1/observability/advisories").json()["items"]
         assert any(item["code"] == "node_unreachable" for item in advisories)
         assert client.get("/api/v1/diagnostics/background").json()["status"] == "healthy"
+        health = client.get("/api/v1/health").json()
+        assert health["broker_required"] is False
+        assert health["broker_configured"] is False
+        assert health["broker_connected"] is None
         assert client.get("/api/v1/diagnostics/messages").status_code == 200
         assert client.get("/metrics").status_code == 404
 
@@ -200,6 +204,29 @@ def test_operational_overview_lists_pending_artifacts_roles_nodes_and_diagnostic
         by_id = {item["artifact_id"]: item for item in all_artifacts}
         assert by_id["artifact-result"]["sources"][0]["source_type"] == ("execution_result")
         assert by_id["artifact-checkpoint"]["sources"][0]["source_type"] == ("role_checkpoint")
+
+
+def test_required_disconnected_broker_fails_health_check(tmp_path: Path) -> None:
+    app = create_app(
+        settings=_settings(
+            tmp_path,
+            nats_servers=("nats://broker:4222",),
+            broker_required=True,
+        ),
+        bridge_publisher=_Publisher(),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/health")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "degraded",
+        "broker_required": True,
+        "broker_configured": True,
+        "broker_connected": None,
+        "background": "healthy",
+    }
 
 
 def test_prometheus_and_injected_telemetry_export_are_optional(tmp_path: Path) -> None:

@@ -11,13 +11,14 @@ import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent_bridge_protocol.models import EndpointKind, EndpointRef, ExecutionRequest
 
 from .execution_store import SQLiteExecutionStore
+from .node_ownership import NodeOwnershipLease
 from .runners import (
     AllowedCommand,
     AllowlistedCommandRunner,
@@ -46,8 +47,8 @@ class CodexConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: str | None = None
-    sandbox: str = "workspace_write"
-    approval_mode: str = "deny_all"
+    sandbox: Literal["read_only", "workspace_write", "full_access"] = "full_access"
+    approval_mode: Literal["deny_all", "auto_review"] = "deny_all"
     config: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -63,6 +64,7 @@ class RunnerConfig(BaseModel):
     lease_renewal_seconds: float = Field(default=20, gt=0)
     retry_backoff_seconds: float = Field(default=5, ge=0)
     fetch_timeout_seconds: float = Field(default=1, gt=0)
+    node_ownership_ttl_seconds: float = Field(default=30, gt=3)
 
     @model_validator(mode="after")
     def validate_lease(self) -> RunnerConfig:
@@ -127,6 +129,7 @@ class RunnerService:
     config: RunnerConfig
     transport: JetStreamTransport
     store: SQLiteExecutionStore
+    ownership: NodeOwnershipLease | None = None
 
     async def serve(self, stop: asyncio.Event | None = None) -> None:
         stop_event = stop or asyncio.Event()
@@ -174,6 +177,8 @@ class RunnerService:
         )
         control_worker = ControlWorker(self.store)
         await self.transport.connect()
+        if self.ownership is not None:
+            await self.ownership.acquire()
         subscriptions: list[tuple[BridgeSubscription, ExecutionWorker | ControlWorker]] = []
         for capability in self.config.capabilities:
             safe = capability.replace("_", "-")
@@ -230,12 +235,29 @@ class RunnerService:
                 await worker.run_once(subscription, timeout=self.config.fetch_timeout_seconds)
 
         tasks = [asyncio.create_task(consume(*item)) for item in subscriptions]
+        stop_task = asyncio.create_task(stop_event.wait())
+        ownership_task = (
+            asyncio.create_task(self.ownership.maintain()) if self.ownership is not None else None
+        )
         try:
-            await stop_event.wait()
+            waiting = {stop_task}
+            if ownership_task is not None:
+                waiting.add(ownership_task)
+            done, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+            if ownership_task is not None and ownership_task in done:
+                ownership_task.result()
         finally:
+            stop_task.cancel()
+            if ownership_task is not None:
+                ownership_task.cancel()
             for task in tasks:
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            cleanup_tasks = [stop_task, *tasks]
+            if ownership_task is not None:
+                cleanup_tasks.append(ownership_task)
+            await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+            if self.ownership is not None:
+                await self.ownership.release()
             await self.transport.close()
             self.store.close()
 
@@ -264,10 +286,16 @@ async def _serve(config_path: Path) -> None:
     for event in (signal.SIGINT, signal.SIGTERM):
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(event, stop.set)
+    transport = JetStreamTransport(_transport_settings(config.node_id))
     service = RunnerService(
         config=config,
-        transport=JetStreamTransport(_transport_settings(config.node_id)),
+        transport=transport,
         store=SQLiteExecutionStore(state_path),
+        ownership=NodeOwnershipLease(
+            transport,
+            node_id=config.node_id,
+            ttl_seconds=config.node_ownership_ttl_seconds,
+        ),
     )
     await service.serve(stop)
 

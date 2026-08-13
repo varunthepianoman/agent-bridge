@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
+import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, cast
-from uuid import uuid4
+from urllib.parse import quote
+from uuid import UUID, uuid4
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent_bridge_bridge.collaboration_worker import CollaborationProjectionWorker
@@ -31,6 +36,7 @@ from .collaboration import (
 from .collaboration_api import mount_collaboration_api
 from .config import Settings
 from .convergence import ConvergenceController
+from .convergence_api import mount_convergence_api
 from .coordinator_adapter import AsyncCoordinatorPersistence
 from .coordinator_api import mount_coordinator_api
 from .coordinator_runtime import BridgeCoordinatorActionExecutor, CoordinatorRuntime
@@ -100,6 +106,9 @@ def create_app(
         observer=projection_observer if managed_transport is None else None,
     )
     collaboration_sink = AsyncCollaborationEnvelopeSink(collaboration_store)
+    convergence_controller = ConvergenceController(
+        resolved_manual_bridge_service, role_store, repository
+    )
     result_projection_worker = ExecutionResultProjectionWorker(
         resolved_manual_bridge_service,
         collaboration_sink,
@@ -107,9 +116,7 @@ def create_app(
         role_store=role_store,
         node_store=node_store,
         environment_id=resolved.environment_id,
-        convergence=ConvergenceController(
-            resolved_manual_bridge_service, role_store, repository
-        ),
+        convergence=convergence_controller,
     )
     collaboration_service = CollaborationService(
         collaboration_store, resolved_manual_bridge_service
@@ -286,6 +293,7 @@ def create_app(
     app.state.manual_bridge_service = resolved_manual_bridge_service
     app.state.bridge_transport = managed_transport
     app.state.result_projection_worker = result_projection_worker
+    app.state.convergence_controller = convergence_controller
     mount_role_api(app)
     mount_coordinator_api(app)
     mount_collaboration_api(app)
@@ -293,20 +301,95 @@ def create_app(
     mount_observability_api(app)
     mount_broker_projection_api(app)
     mount_manual_bridge_api(app)
+    mount_convergence_api(app)
+
+    codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+    local_thread_cache: tuple[float, frozenset[str]] = (0.0, frozenset())
+
+    def local_codex_thread_ids() -> frozenset[str]:
+        nonlocal local_thread_cache
+        now = time.monotonic()
+        if now - local_thread_cache[0] < 5.0:
+            return local_thread_cache[1]
+        thread_ids: set[str] = set()
+        for root in (codex_home / "sessions", codex_home / "archived_sessions"):
+            if not root.is_dir():
+                continue
+            for path in root.rglob("rollout-*.jsonl"):
+                candidate = path.stem[-36:]
+                try:
+                    thread_ids.add(str(UUID(candidate)))
+                except ValueError:
+                    continue
+        local_thread_cache = (now, frozenset(thread_ids))
+        return local_thread_cache[1]
 
     def conversation_dict(
         row: ConversationRow, *, include_transcript: bool = False
     ) -> dict[str, Any]:
         result = row.as_dict(include_transcript=include_transcript)
         result.update(node_store.location_status(row.node_id, row.environment_id))
+        result["interactive_open"] = interactive_open_dict(row)
         return result
 
+    def interactive_open_dict(row: ConversationRow) -> dict[str, Any]:
+        terminal = {
+            "available": bool(row.resume_command),
+            "command": row.resume_command,
+        }
+        if row.provider.casefold() != "codex":
+            return {
+                "desktop": {
+                    "available": False,
+                    "reason": "Desktop deep links are currently supported only for Codex chats.",
+                },
+                "terminal": terminal,
+            }
+
+        metadata = json.loads(row.raw_metadata_json or "{}")
+        rollout_path = metadata.get("path") if isinstance(metadata, dict) else None
+        local_rollout_exists = bool(
+            isinstance(rollout_path, str)
+            and Path(rollout_path).is_absolute()
+            and Path(rollout_path).is_file()
+        )
+        local_rollout_exists = (
+            local_rollout_exists or row.provider_thread_id in local_codex_thread_ids()
+        )
+        local_owner = row.node_id == resolved.node_id
+        if local_rollout_exists or local_owner:
+            return {
+                "desktop": {
+                    "available": True,
+                    "url": f"codex://threads/{quote(row.provider_thread_id, safe='')}",
+                    "reason": None,
+                },
+                "terminal": terminal,
+            }
+        return {
+            "desktop": {
+                "available": False,
+                "reason": (
+                    "This Codex thread is not present in this machine's local history. "
+                    "Open it from its owning host or use that host's terminal resume command."
+                ),
+            },
+            "terminal": terminal,
+        }
+
     @app.get("/api/v1/health")
-    def health() -> dict[str, Any]:
+    def health(response: Response) -> dict[str, Any]:
         broker_connected = managed_transport.connected if managed_transport else None
-        degraded = supervisor.degraded or (managed_transport is not None and not broker_connected)
+        broker_configured = bool(resolved.nats_servers)
+        degraded = supervisor.degraded or (
+            resolved.broker_required and (not broker_configured or not broker_connected)
+        ) or (managed_transport is not None and not broker_connected)
+        if degraded:
+            response.status_code = 503
         return {
             "status": "degraded" if degraded else "ok",
+            "broker_required": resolved.broker_required,
+            "broker_configured": broker_configured,
             "broker_connected": broker_connected,
             "background": supervisor.snapshot()["status"],
         }

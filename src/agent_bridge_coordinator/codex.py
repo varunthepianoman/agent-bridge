@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from copy import deepcopy
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,7 @@ class CodexCoordinatorModel:
         self,
         *,
         model: str | None = None,
-        sandbox: str = "workspace_write",
+        sandbox: str = "full_access",
         approval_mode: str = "deny_all",
         default_cwd: Path | None = None,
         unavailable_error: Callable[[Exception], bool] | None = None,
@@ -98,7 +99,7 @@ class CodexCoordinatorModel:
         try:
             result = await thread.run(
                 prompt,
-                output_schema=CoordinatorModelOutput.model_json_schema(),
+                output_schema=_strict_output_schema(CoordinatorModelOutput.model_json_schema()),
             )
             if result.final_response is None:
                 raise ValueError("Codex coordinator returned no final structured response")
@@ -130,6 +131,93 @@ def _adapter_handle(session: CoordinatorSession) -> str:
     if not isinstance(handle, str) or not handle:
         raise RuntimeError("coordinator session has no Codex adapter handle")
     return handle
+
+
+def _strict_output_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Adapt Pydantic's schema to the strict object contract used by Codex.
+
+    Pydantic omits defaulted fields from ``required``. Codex structured output
+    instead requires every declared property to be present; optional values are
+    expressed by the nullable type already emitted by Pydantic.
+    """
+    strict = deepcopy(schema)
+
+    def visit(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if not isinstance(node, dict):
+            return
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            node["required"] = list(properties)
+            node.setdefault("additionalProperties", False)
+        elif node.get("type") == "object" and node.get("additionalProperties") is True:
+            # Strict structured output cannot express an arbitrary JSON mapping.
+            # Expose the closed subset currently understood by the Bridge executor.
+            # Arbitrary parameters/extensions need first-class models before they can
+            # safely become coordinator output.
+            node.clear()
+            node.update(_coordinator_payload_schema())
+        node.pop("default", None)
+        for value in node.values():
+            visit(value)
+
+    visit(strict)
+    return strict
+
+
+def _coordinator_payload_schema() -> dict[str, Any]:
+    nullable_string = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+    target = {
+        "anyOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": [
+                            "conversation",
+                            "role",
+                            "node",
+                            "capability",
+                            "room",
+                            "endpoint",
+                        ],
+                    },
+                    "id": {"type": "string"},
+                },
+                "required": ["kind", "id"],
+                "additionalProperties": False,
+            },
+            {"type": "null"},
+        ]
+    }
+    properties = {
+        "operation": {
+            "type": "string",
+            "enum": [
+                "new_execution",
+                "resume_conversation",
+                "wake_endpoint",
+                "invoke_adapter",
+            ],
+        },
+        "instruction": deepcopy(nullable_string),
+        "target": target,
+        "conversation_id": deepcopy(nullable_string),
+        "adapter": deepcopy(nullable_string),
+        "work_id": deepcopy(nullable_string),
+        "repository_id": deepcopy(nullable_string),
+        "path": deepcopy(nullable_string),
+    }
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
 
 
 def _looks_like_missing_thread(error: Exception) -> bool:

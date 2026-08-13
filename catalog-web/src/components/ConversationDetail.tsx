@@ -46,6 +46,10 @@ export function ConversationDetail({ conversation, loading, saving, resuming, on
     ? `${cwd ? `cd ${shellQuote(cwd)} && ` : ''}claude --resume ${shellQuote(providerThread.split(':agent:')[0])}`
     : `codex resume ${providerThread}${cwd ? ` -C ${shellQuote(cwd)}` : ''}`
   const command = conversation.resume_command || fallbackResume
+  const desktopOpen = conversation.interactive_open?.desktop
+  const canOpenDesktop = conversation.provider.toLowerCase() === 'codex'
+    && desktopOpen?.available === true
+    && Boolean(desktopOpen.url)
   const save = () => {
     onUpdate({
       title: title.trim() || displayTitle,
@@ -75,9 +79,15 @@ export function ConversationDetail({ conversation, loading, saving, resuming, on
           </div>
         </div>
         <div className="header-actions">
-          <button className="primary-button" onClick={onResume} disabled={resuming || conversation.location?.available === false}>
-            <Play size={15} fill="currentColor" />{resuming ? 'Opening…' : `Open in ${conversation.provider === 'claude' ? 'Claude' : 'Codex'}`}
-          </button>
+          {canOpenDesktop ? (
+            <a className="primary-button" href={desktopOpen?.url} aria-label="Open in Codex desktop">
+              <Play size={15} fill="currentColor" />Open in Codex
+            </a>
+          ) : (
+            <button className="primary-button" onClick={onResume} disabled={resuming || conversation.location?.available === false}>
+              <Play size={15} fill="currentColor" />{resuming ? 'Opening…' : `Open in ${conversation.provider === 'claude' ? 'Claude' : 'Codex'}`}
+            </button>
+          )}
           <button className="icon-button" title="Edit metadata" onClick={() => setEditing(!editing)}>{editing ? <X size={17} /> : <Pencil size={17} />}</button>
           <button className={`icon-button ${conversation.pinned ? 'active' : ''}`} title={conversation.pinned ? 'Unpin' : 'Pin'} onClick={() => onUpdate({ pinned: !conversation.pinned })}>{conversation.pinned ? <PinOff size={17} /> : <Pin size={17} />}</button>
           <button className="icon-button" title={conversation.archived ? 'Restore' : 'Archive'} onClick={() => onUpdate({ archived: !conversation.archived })}>{conversation.archived ? <ArchiveRestore size={17} /> : <Archive size={17} />}</button>
@@ -89,6 +99,10 @@ export function ConversationDetail({ conversation, loading, saving, resuming, on
         {conversation.location?.available === false && <div className="location-unavailable" role="alert">
           <AlertTriangle size={17} />
           <div><strong>Original environment unavailable</strong><span>This conversation stays searchable, but Agent Bridge will not open it somewhere else. Bring {conversation.location.node_name || 'its owning node'} online or copy the native resume command for that environment.</span></div>
+        </div>}
+        {conversation.provider.toLowerCase() === 'codex' && desktopOpen?.available === false && <div className="location-unavailable" role="status">
+          <AlertTriangle size={17} />
+          <div><strong>Desktop chat unavailable on this machine</strong><span>{desktopOpen.reason || 'The local Codex thread could not be found. Use the terminal fallback on its owning host.'}</span></div>
         </div>}
         <div className="context-grid">
           <ContextCard icon={<MapPin size={15} />} label="Location" value={conversation.location?.node_name || conversation.location?.environment || 'This machine'} secondary={cwd} />

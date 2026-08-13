@@ -63,6 +63,13 @@ def test_runner_config_supports_codex_only_node(tmp_path: Path) -> None:
         RunnerConfig(node_id="empty")
 
 
+def test_runner_codex_defaults_to_unattended_full_access() -> None:
+    config = RunnerConfig(node_id="local-codex", codex={})
+    assert config.codex is not None
+    assert config.codex.sandbox == "full_access"
+    assert config.codex.approval_mode == "deny_all"
+
+
 class _EmptySubscription:
     async def fetch(self, *, batch: int, timeout: float) -> list[Any]:
         await asyncio.sleep(0)

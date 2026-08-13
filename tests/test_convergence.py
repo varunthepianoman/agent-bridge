@@ -110,6 +110,17 @@ def test_convergence_reuses_two_role_conversations_and_stops_on_acceptance(tmp_p
         )
         await controller.process(envelope)
 
+    asyncio.run(result("intake", "review_intake_and_plan", "Plan ready"))
+    state = roles.get_work("work-loop").extensions["agent_bridge.convergence"]["state"]
+    assert state["status"] == "awaiting_user_implementation_approval"
+
+    asyncio.run(controller.approve_implementation("work-loop"))
+    dispatched = publisher.published[-1][0].body
+    assert dispatched["operation"] == "resume_conversation"
+    assert dispatched["conversation_id"] == "thread-dev"
+    assert dispatched["parameters"]["stage"] == "implementation"
+    assert dispatched["extensions"]["agent_bridge.workflow"]["remote_write_authorized"] is False
+
     asyncio.run(result("one", "implementation", "Implemented and tested"))
     dispatched = publisher.published[-1][0].body
     assert dispatched["operation"] == "resume_conversation"
@@ -124,6 +135,37 @@ def test_convergence_reuses_two_role_conversations_and_stops_on_acceptance(tmp_p
 
     published_before = len(publisher.published)
     asyncio.run(result("three", "audit", "VERDICT: accepted\nTests pass"))
-    assert len(publisher.published) == published_before + 1  # intake request only; no next turn
+    assert len(publisher.published) == published_before + 2
+    assert publisher.published[-1][0].body["parameters"]["stage"] == "draft_replies"
+
+    asyncio.run(result("four", "draft_replies", "Commit abc; draft replies ready"))
     state = roles.get_work("work-loop").extensions["agent_bridge.convergence"]["state"]
-    assert state["status"] == "accepted"
+    assert state["status"] == "awaiting_publish_approval"
+
+    asyncio.run(controller.approve_publish("work-loop"))
+    published = publisher.published[-1][0].body
+    assert published["parameters"]["stage"] == "publish"
+    assert published["extensions"]["agent_bridge.workflow"]["remote_write_authorized"] is True
+
+    asyncio.run(result("five", "publish", "Pushed and posted"))
+    state = roles.get_work("work-loop").extensions["agent_bridge.convergence"]["state"]
+    assert state["status"] == "completed"
+
+    work = roles.get_work("work-loop")
+    policy = dict(work.extensions["agent_bridge.convergence"])
+    policy.update(
+        {
+            "publish_gate_required": False,
+            "state": {"round": 0, "status": "preparing_publish_package"},
+        }
+    )
+    roles.update_work(
+        "work-loop",
+        {"extensions": {**work.extensions, "agent_bridge.convergence": policy}},
+    )
+    asyncio.run(result("six", "draft_replies", "Automatic publish package ready"))
+    published = publisher.published[-1][0].body
+    assert published["parameters"]["stage"] == "publish"
+    assert published["extensions"]["agent_bridge.workflow"]["remote_write_authorized"] is True
+    state = roles.get_work("work-loop").extensions["agent_bridge.convergence"]["state"]
+    assert state["status"] == "publishing"

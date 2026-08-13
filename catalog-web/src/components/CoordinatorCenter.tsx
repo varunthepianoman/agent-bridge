@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Bot, Check, ChevronRight, CircleGauge, Clock3, Network, Play, Send, ShieldCheck, Sparkles, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { activateCoordinatorRole, decideCoordinatorIntake, listCoordinatorActivations, listCoordinatorIntakes, listCoordinatorRollups, listRoleReports, listRoles, submitCoordinatorIntake } from '../api'
+import { activateCoordinatorRole, approveConvergenceImplementation, decideCoordinatorIntake, listCoordinatorActivations, listCoordinatorIntakes, listCoordinatorRollups, listRoleReports, listRoles, submitCoordinatorIntake } from '../api'
 import type { AuthorityLimits, AutonomyMode, CoordinatorIntakeInput, CoordinatorRole, WorkItem } from '../types'
 
 interface Props { workItems: WorkItem[], onOpenManual: () => void, initialWorkId?: string, initialRoleId?: string }
@@ -33,6 +33,7 @@ export function CoordinatorCenter({ workItems, onOpenManual, initialWorkId, init
   const activations = useQuery({ queryKey: ['role-activations', targetRoleId], queryFn: () => listCoordinatorActivations(targetRoleId), enabled: Boolean(targetRoleId), refetchInterval: 5_000 })
   const selectedIntake = intakes.data?.find((item) => item.request_id === selectedRequestId) ?? intakes.data?.[0]
   const attention = intakes.data?.filter((item) => item.approval_required || item.status === 'awaiting_approval' || item.attention_required) ?? []
+  const implementationGates = workItems.filter((work) => convergenceState(work) === 'awaiting_user_implementation_approval')
 
   const effectiveAuthority = useMemo(() => ({
     ...authority,
@@ -51,6 +52,14 @@ export function CoordinatorCenter({ workItems, onOpenManual, initialWorkId, init
   const decisionMutation = useMutation({
     mutationFn: ({ requestId, decision }: { requestId: string, decision: 'approve' | 'reject' }) => decideCoordinatorIntake(requestId, decision, undefined, decision === 'approve' ? effectiveAuthority : undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['coordinator-intakes'] }),
+    onError: (value: Error) => setError(value.message),
+  })
+  const implementationDecisionMutation = useMutation({
+    mutationFn: (workItemId: string) => approveConvergenceImplementation(workItemId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['work-items'] })
+      await queryClient.invalidateQueries({ queryKey: ['work-item'] })
+    },
     onError: (value: Error) => setError(value.message),
   })
   const activationMutation = useMutation({
@@ -112,8 +121,9 @@ export function CoordinatorCenter({ workItems, onOpenManual, initialWorkId, init
       </div>
 
       <aside className="attention-panel">
-        <div className="attention-title"><CircleGauge size={15} /><div><h2>Attention queue</h2><p>Only decisions that need you.</p></div><span>{attention.length}</span></div>
-        {attention.length ? attention.map((item) => <article key={item.request_id}><div><Clock3 size={12} /><span>{item.status.replaceAll('_', ' ')}</span></div><strong>{item.request?.objective || item.objective || item.request_id}</strong><p>{item.attention_required || 'Approval is required before bounded execution begins.'}</p><div className="approval-actions"><button disabled={decisionMutation.isPending} onClick={() => decisionMutation.mutate({ requestId: item.request_id, decision: 'reject' })}><X size={12} />Reject</button><button disabled={decisionMutation.isPending} onClick={() => decisionMutation.mutate({ requestId: item.request_id, decision: 'approve' })}><Check size={12} />Approve</button></div></article>) : <div className="attention-empty"><Check size={20} /><strong>Nothing needs approval</strong><span>Coordinators will surface meaningful scope, authority, and blocker decisions here.</span></div>}
+        <div className="attention-title"><CircleGauge size={15} /><div><h2>Attention queue</h2><p>Only decisions that need you.</p></div><span>{attention.length + implementationGates.length}</span></div>
+        {implementationGates.map((work) => <article key={`implementation-${work.id}`}><div><Clock3 size={12} /><span>awaiting implementation approval</span></div><strong>{work.title}</strong><p>Review intake and the implementation proposal are ready. Approval starts local development; remote writes remain gated.</p><div className="approval-actions"><button disabled={implementationDecisionMutation.isPending} onClick={() => implementationDecisionMutation.mutate(work.id)}><Check size={12} />Approve implementation</button></div></article>)}
+        {attention.length ? attention.map((item) => <article key={item.request_id}><div><Clock3 size={12} /><span>{item.status.replaceAll('_', ' ')}</span></div><strong>{item.request?.objective || item.objective || item.request_id}</strong><p>{item.attention_required || 'Approval is required before bounded execution begins.'}</p><div className="approval-actions"><button disabled={decisionMutation.isPending} onClick={() => decisionMutation.mutate({ requestId: item.request_id, decision: 'reject' })}><X size={12} />Reject</button><button disabled={decisionMutation.isPending} onClick={() => decisionMutation.mutate({ requestId: item.request_id, decision: 'approve' })}><Check size={12} />Approve</button></div></article>) : implementationGates.length === 0 && <div className="attention-empty"><Check size={20} /><strong>Nothing needs approval</strong><span>Coordinators will surface meaningful scope, authority, and blocker decisions here.</span></div>}
       </aside>
     </div>
   </section>
@@ -131,4 +141,13 @@ function TopologyValue({ value, actions }: { value: Record<string, unknown>, act
 
 function modeDescription(mode: AutonomyMode) {
   return { manual: 'Direct Bridge', advise: 'Recommend only', delegate: 'Bounded execution', autonomous: 'Adapt within budget' }[mode]
+}
+
+function convergenceState(work: WorkItem): string | undefined {
+  const raw = work.extensions?.['agent_bridge.convergence']
+  if (!raw || typeof raw !== 'object') return undefined
+  const state = (raw as Record<string, unknown>).state
+  if (!state || typeof state !== 'object') return undefined
+  const status = (state as Record<string, unknown>).status
+  return typeof status === 'string' ? status : undefined
 }

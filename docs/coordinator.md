@@ -20,8 +20,9 @@ pip install -e '.[codex]'
 ```
 
 Coordinator SDK turns use strict JSON Schema output and default to
-`ApprovalMode.deny_all`. An unattended activation therefore fails and surfaces
-attention instead of waiting indefinitely for a foreground approval.
+`Sandbox.full_access` with `ApprovalMode.deny_all`. Agent Bridge therefore runs
+headless Codex agents without sandbox approval prompts unless a runner or
+coordinator explicitly selects a narrower policy.
 
 Autonomous intake fails closed unless it carries an explicit deadline, bounded
 scope, allowed capabilities, and at least one finite token or cost budget.

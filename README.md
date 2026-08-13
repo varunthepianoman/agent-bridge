@@ -33,7 +33,7 @@ Install and start the API:
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
-.venv/bin/agent-bridge-catalog
+.venv/bin/agent-bridge-catalog --allow-http-only
 ```
 
 In another terminal, start the UI:
@@ -63,6 +63,7 @@ Useful configuration:
 | `AGENT_BRIDGE_CODEX_BIN` | Path to the Codex executable |
 | `AGENT_BRIDGE_CLAUDE_BIN` | Path to the Claude Code executable on node agents |
 | `AGENT_BRIDGE_NATIVE_LAUNCH` | Set to `1` to allow explicit native terminal launch |
+| `AGENT_BRIDGE_BROKER_REQUIRED` | Set to `0` only for an explicitly HTTP-only Catalog; the CLI requires a broker by default |
 | `AGENT_BRIDGE_NATS_SERVERS` | Comma-separated broker URLs; enables Manual publishing and result projection |
 | `AGENT_BRIDGE_NATS_USERNAME` | Broker username; must be paired with a password |
 | `AGENT_BRIDGE_NATS_PASSWORD` | Broker password; must be paired with a username |

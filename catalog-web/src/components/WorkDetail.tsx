@@ -33,6 +33,10 @@ interface Props {
   allConversations: Conversation[];
   loading: boolean;
   saving: boolean;
+  approvingImplementation?: boolean;
+  onApproveImplementation?: () => void;
+  approvingPublish?: boolean;
+  onApprovePublish?: () => void;
   onUpdate: (input: Partial<WorkItemInput>) => void;
   onAttach: (conversationId: string) => void;
   onDetach: (conversationId: string) => void;
@@ -98,6 +102,7 @@ export function WorkDetail(props: Props) {
       (item) => ids.has(item.source_id) && ids.has(item.target_id),
     );
   }, [entityOptions, relationships]);
+  const convergence = convergencePolicy(work?.extensions);
 
   if (loading)
     return (
@@ -225,6 +230,29 @@ export function WorkDetail(props: Props) {
         <ManualBridge workId={work.id} />
       ) : (
         <div className="detail-scroll work-overview">
+          {convergence?.state === "awaiting_user_implementation_approval" &&
+            props.onApproveImplementation && (
+              <section className="work-section editor-card">
+                <div className="section-title">
+                  <Sparkles size={15} />
+                  <h3>Implementation proposal ready</h3>
+                </div>
+                <p className="muted">
+                  Review intake and planning are complete. Approval resumes the
+                  developer with local edit, test, and commit authority; remote
+                  writes remain blocked until the publish gate.
+                </p>
+                <button
+                  className="primary-button compact"
+                  disabled={props.approvingImplementation}
+                  onClick={props.onApproveImplementation}
+                >
+                  {props.approvingImplementation
+                    ? "Approving…"
+                    : "Approve implementation"}
+                </button>
+              </section>
+            )}
           {editing && (
             <section className="work-section editor-card">
               <div className="section-title">
@@ -256,6 +284,34 @@ export function WorkDetail(props: Props) {
                   <option value="archived">Archived</option>
                 </select>
               </label>
+              {convergence && (
+                <label className="field-label">
+                  Publish policy
+                  <select
+                    aria-label="Publish policy"
+                    value={convergence.publish_gate_required ? "gated" : "automatic"}
+                    onChange={(event) => {
+                      const raw = work.extensions?.["agent_bridge.convergence"];
+                      const policy =
+                        raw && typeof raw === "object"
+                          ? (raw as Record<string, unknown>)
+                          : {};
+                      props.onUpdate({
+                        extensions: {
+                          ...work.extensions,
+                          "agent_bridge.convergence": {
+                            ...policy,
+                            publish_gate_required: event.target.value === "gated",
+                          },
+                        },
+                      });
+                    }}
+                  >
+                    <option value="gated">Require approval before push and post</option>
+                    <option value="automatic">Push and post automatically</option>
+                  </select>
+                </label>
+              )}
               <button
                 className="primary-button compact"
                 disabled={props.saving}
@@ -347,6 +403,9 @@ export function WorkDetail(props: Props) {
                   <RoleCard
                     key={role.id}
                     role={role}
+                    convergence={convergence}
+                    approvingPublish={props.approvingPublish}
+                    onApprovePublish={props.onApprovePublish}
                     onOpenConversation={props.onOpenConversation}
                     parent={roles.find(
                       (candidate) => candidate.id === role.parent_role_id,
@@ -469,12 +528,24 @@ function RoleCard({
   role,
   parent,
   onOpenConversation,
+  convergence,
+  approvingPublish,
+  onApprovePublish,
 }: {
   role: CoordinatorRole;
   parent?: CoordinatorRole;
   onOpenConversation: (id: string) => void;
+  convergence?: ConvergencePolicy;
+  approvingPublish?: boolean;
+  onApprovePublish?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const loopRole =
+    convergence?.developer_role_id === role.id
+      ? "developer"
+      : convergence?.auditor_role_id === role.id
+        ? "auditor"
+        : undefined;
   return (
     <article className={`role-card ${expanded ? "expanded" : ""}`}>
       <span className={`role-state ${role.status}`} />
@@ -530,6 +601,39 @@ function RoleCard({
                 )}
               </dd>
             </div>
+            {loopRole && (
+              <div>
+                <dt>Convergence loop</dt>
+                <dd>
+                  {loopRole} · round {convergence!.round} of{" "}
+                  {convergence!.max_rounds}
+                </dd>
+              </div>
+            )}
+            {loopRole === "developer" &&
+              convergence?.state === "awaiting_publish_approval" &&
+              onApprovePublish && (
+                <div className="wide">
+                  <dt>Human gate</dt>
+                  <dd>
+                    <button
+                      className="primary-button compact"
+                      disabled={approvingPublish}
+                      onClick={onApprovePublish}
+                    >
+                      {approvingPublish
+                        ? "Approving…"
+                        : "Approve push and post"}
+                    </button>
+                  </dd>
+                </div>
+              )}
+            {loopRole && (
+              <div>
+                <dt>Loop state</dt>
+                <dd>{convergence!.state.replaceAll("_", " ")}</dd>
+              </div>
+            )}
             <div className="wide">
               <dt>Charter</dt>
               <dd>{role.charter}</dd>
@@ -540,6 +644,44 @@ function RoleCard({
       <em>{role.authority_profile || "authority unset"}</em>
     </article>
   );
+}
+
+interface ConvergencePolicy {
+  developer_role_id: string;
+  auditor_role_id: string;
+  max_rounds: number;
+  round: number;
+  state: string;
+  publish_gate_required: boolean;
+}
+
+function convergencePolicy(
+  extensions?: Record<string, unknown>,
+): ConvergencePolicy | undefined {
+  const raw = extensions?.["agent_bridge.convergence"];
+  if (!raw || typeof raw !== "object") return undefined;
+  const policy = raw as Record<string, unknown>;
+  const state =
+    policy.state && typeof policy.state === "object"
+      ? (policy.state as Record<string, unknown>)
+      : {};
+  if (
+    typeof policy.developer_role_id !== "string" ||
+    typeof policy.auditor_role_id !== "string" ||
+    typeof policy.max_rounds !== "number"
+  )
+    return undefined;
+  return {
+    developer_role_id: policy.developer_role_id,
+    auditor_role_id: policy.auditor_role_id,
+    max_rounds: policy.max_rounds,
+    round: typeof state.round === "number" ? state.round : 0,
+    state: typeof state.status === "string" ? state.status : "not started",
+    publish_gate_required:
+      typeof policy.publish_gate_required === "boolean"
+        ? policy.publish_gate_required
+        : true,
+  };
 }
 
 function RelationshipList({
