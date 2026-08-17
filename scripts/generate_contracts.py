@@ -8,70 +8,14 @@ from pathlib import Path
 
 from pydantic import TypeAdapter
 
-from agent_bridge_protocol import (
-    BridgeEnvelope,
-    CollaborationMessage,
-    CollaborationRoom,
-    ConversationHandoff,
-    CoordinatorActivation,
-    CoordinatorIntake,
-    CoordinatorRole,
-    ExecutionAttempt,
-    ExecutionFailure,
-    ExecutionLease,
-    ExecutionProgress,
-    ExecutionRequest,
-    ExecutionResult,
-    NodeHeartbeat,
-    NodeRegistration,
-    RegisteredEndpoint,
-    Relationship,
-    RoleCheckpoint,
-    RoleConversationLink,
-    RoleEvent,
-    RoleLease,
-    RoleReport,
-    RoleRollupState,
-    WorkConversationLink,
-    WorkItem,
-    WorkRequest,
-)
-
-ProtocolDocument = (
-    BridgeEnvelope
-    | Relationship
-    | ExecutionRequest
-    | ExecutionAttempt
-    | ExecutionLease
-    | ExecutionProgress
-    | ExecutionResult
-    | ExecutionFailure
-    | NodeRegistration
-    | NodeHeartbeat
-    | WorkItem
-    | CoordinatorRole
-    | ConversationHandoff
-    | RoleCheckpoint
-    | RoleConversationLink
-    | RoleReport
-    | RoleEvent
-    | RoleLease
-    | WorkRequest
-    | WorkConversationLink
-    | CoordinatorIntake
-    | CoordinatorActivation
-    | RoleRollupState
-    | RegisteredEndpoint
-    | CollaborationRoom
-    | CollaborationMessage
-)
+from agent_bridge_protocol import BridgeEnvelope
 
 
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     output = root / "schemas" / "agent-bridge-v1.schema.json"
     output.parent.mkdir(parents=True, exist_ok=True)
-    schema = TypeAdapter(ProtocolDocument).json_schema()
+    schema = TypeAdapter(BridgeEnvelope).json_schema()
     schema["$id"] = "https://agent-bridge.local/schemas/agent-bridge-v1.schema.json"
     schema["title"] = "AgentBridgeProtocolV1"
     output.write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n", encoding="utf-8")

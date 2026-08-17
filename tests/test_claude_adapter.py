@@ -45,7 +45,7 @@ async def test_reconciles_and_generates_provider_native_resume_command(tmp_path:
     )
 
     result = await synchronizer.reconcile(include_turns=False)
-    rows, total = repository.list(provider="claude")
+    rows, total = repository.list(provider="claude", selected_only=False)
 
     assert result.discovered == result.imported == total == 2
     assert rows[0].resume_command == "cd /work/robot && claude --resume session-root"

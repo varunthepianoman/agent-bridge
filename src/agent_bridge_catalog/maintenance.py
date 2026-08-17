@@ -18,9 +18,9 @@ from .db import (
     BrokerDeadLetterRow,
     BrokerDeliveryRow,
     BrokerMessageRow,
-    CollaborationMessageRow,
-    CoordinatorActivationRow,
+    ConversationMessageRow,
     Database,
+    NatsEventRow,
 )
 
 
@@ -28,15 +28,15 @@ from .db import (
 class RetentionPolicy:
     broker_days: int = 30
     resolved_dead_letter_days: int = 30
-    collaboration_days: int = 180
-    coordinator_activation_days: int = 180
+    message_days: int = 180
+    nats_event_days: int = 30
 
     def __post_init__(self) -> None:
         for name, value in (
             ("broker_days", self.broker_days),
             ("resolved_dead_letter_days", self.resolved_dead_letter_days),
-            ("collaboration_days", self.collaboration_days),
-            ("coordinator_activation_days", self.coordinator_activation_days),
+            ("message_days", self.message_days),
+            ("nats_event_days", self.nats_event_days),
         ):
             if value < 1:
                 raise ValueError(f"{name} must be at least one day")
@@ -82,21 +82,21 @@ class MaintenanceService:
             )
             counts["broker_messages"] = _affected(result)
             result = session.execute(
-                delete(CollaborationMessageRow).where(
-                    CollaborationMessageRow.updated_at
-                    < current - timedelta(days=policy.collaboration_days),
-                    CollaborationMessageRow.state.in_(("published", "received", "failed")),
+                delete(ConversationMessageRow).where(
+                    ConversationMessageRow.updated_at
+                    < current - timedelta(days=policy.message_days),
+                    ConversationMessageRow.state.in_(
+                        ("delivered", "published", "received", "failed")
+                    ),
                 )
             )
-            counts["collaboration_messages"] = _affected(result)
+            counts["conversation_messages"] = _affected(result)
             result = session.execute(
-                delete(CoordinatorActivationRow).where(
-                    CoordinatorActivationRow.updated_at
-                    < current - timedelta(days=policy.coordinator_activation_days),
-                    CoordinatorActivationRow.status.in_(("completed", "failed", "expired")),
+                delete(NatsEventRow).where(
+                    NatsEventRow.occurred_at < current - timedelta(days=policy.nats_event_days)
                 )
             )
-            counts["coordinator_activations"] = _affected(result)
+            counts["nats_events"] = _affected(result)
             session.commit()
         return counts
 
@@ -266,7 +266,8 @@ def main() -> None:
     restore.add_argument("destination", type=Path)
     retention = commands.add_parser("retention")
     retention.add_argument("--broker-days", type=int, default=30)
-    retention.add_argument("--collaboration-days", type=int, default=180)
+    retention.add_argument("--message-days", type=int, default=180)
+    retention.add_argument("--nats-event-days", type=int, default=30)
     transcript = commands.add_parser("delete-transcript")
     transcript.add_argument("conversation_id")
     args = parser.parse_args()
@@ -285,7 +286,8 @@ def main() -> None:
             result = service.apply_retention(
                 RetentionPolicy(
                     broker_days=args.broker_days,
-                    collaboration_days=args.collaboration_days,
+                    message_days=args.message_days,
+                    nats_event_days=args.nats_event_days,
                 )
             )
         else:

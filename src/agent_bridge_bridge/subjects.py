@@ -13,16 +13,13 @@ DEAD_LETTER_STREAM = "BRIDGE_DLQ_V1"
 
 WORK_SUBJECTS = (
     f"{NAMESPACE}.inbox.>",
-    f"{NAMESPACE}.capability.>",
     f"{NAMESPACE}.room.>",
-    f"{NAMESPACE}.result.>",
-    f"{NAMESPACE}.control.>",
 )
 EVENT_SUBJECTS = (f"{NAMESPACE}.event.>",)
 DEAD_LETTER_SUBJECTS = (f"{NAMESPACE}.dead.>",)
 
 _TOKEN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
-_FAMILIES = frozenset({"inbox", "capability", "room", "result", "control", "event"})
+_FAMILIES = frozenset({"inbox", "room", "event"})
 
 
 class SubjectError(ValueError):
@@ -47,23 +44,8 @@ def inbox_subject(destination: EndpointRef) -> str:
     )
 
 
-def capability_subject(capability_id: str) -> str:
-    return f"{NAMESPACE}.capability.{validate_token(capability_id, label='capability id')}"
-
-
 def room_subject(room_id: str) -> str:
     return f"{NAMESPACE}.room.{validate_token(room_id, label='room id')}"
-
-
-def result_subject(correlation_id: str) -> str:
-    return f"{NAMESPACE}.result.{validate_token(correlation_id, label='correlation id')}"
-
-
-def control_subject(destination: EndpointRef) -> str:
-    return (
-        f"{NAMESPACE}.control.{validate_token(str(destination.kind), label='endpoint kind')}."
-        f"{validate_token(destination.id)}"
-    )
 
 
 def event_subject(topic: str) -> str:
@@ -88,10 +70,7 @@ def validate_subject(subject: str) -> str:
     family = parts[2]
     expected_parts = {
         "inbox": 5,
-        "capability": 4,
         "room": 4,
-        "result": 4,
-        "control": 5,
         "event": 4,
         "dead": 4,
     }
@@ -106,8 +85,6 @@ def subject_for(envelope: BridgeEnvelope) -> str:
     """Resolve normal delivery routing from an envelope destination."""
 
     destination = envelope.destination
-    if destination.kind == EndpointKind.CAPABILITY:
-        return capability_subject(destination.id)
     if destination.kind == EndpointKind.ROOM:
         return room_subject(destination.id)
     return inbox_subject(destination)

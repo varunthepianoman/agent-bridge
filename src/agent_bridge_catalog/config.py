@@ -22,33 +22,31 @@ class Settings:
     node_id: str
     environment_id: str
     codex_bin: str = "codex"
+    claude_bin: str = "claude"
     native_launch_enabled: bool = False
     nats_servers: tuple[str, ...] = ()
+    nats_replicas: int = 1
     broker_required: bool = False
     nats_credentials_file: Path | None = None
     nats_username: str | None = None
     nats_password: str | None = None
     nats_client_name: str = "agent-bridge-catalog"
-    result_consumer_durable: str = "catalog-execution-results-v1"
-    coordinator_enabled: bool = False
-    coordinator_holder_id: str = "catalog-portfolio-runtime"
-    coordinator_model: str | None = None
-    coordinator_workspace: Path | None = None
-    coordinator_lease_seconds: float = 300.0
-    metrics_enabled: bool = False
-    telemetry_interval_seconds: float = 30.0
+    discovery_interval_seconds: float = 10.0
+    full_reconciliation_interval_seconds: float = 300.0
 
     def __post_init__(self) -> None:
         if self.broker_required and not self.nats_servers:
-            raise ValueError(
-                "broker is required but AGENT_BRIDGE_NATS_SERVERS is not configured"
-            )
+            raise ValueError("broker is required but AGENT_BRIDGE_NATS_SERVERS is not configured")
         if (self.nats_username is None) != (self.nats_password is None):
             raise ValueError("NATS username and password must be configured together")
         if self.nats_credentials_file and self.nats_username:
             raise ValueError("use either a NATS credentials file or username/password")
-        if self.telemetry_interval_seconds <= 0:
-            raise ValueError("telemetry interval must be positive")
+        if self.discovery_interval_seconds <= 0:
+            raise ValueError("discovery interval must be positive")
+        if self.full_reconciliation_interval_seconds <= 0:
+            raise ValueError("full reconciliation interval must be positive")
+        if self.nats_replicas < 1:
+            raise ValueError("NATS replicas must be positive")
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -68,8 +66,10 @@ class Settings:
             node_id=os.environ.get("AGENT_BRIDGE_NODE_ID", socket.gethostname()),
             environment_id=os.environ.get("AGENT_BRIDGE_ENVIRONMENT_ID", "host"),
             codex_bin=os.environ.get("AGENT_BRIDGE_CODEX_BIN", "codex"),
+            claude_bin=os.environ.get("AGENT_BRIDGE_CLAUDE_BIN", "claude"),
             native_launch_enabled=os.environ.get("AGENT_BRIDGE_NATIVE_LAUNCH", "0") == "1",
             nats_servers=servers,
+            nats_replicas=int(os.environ.get("AGENT_BRIDGE_NATS_REPLICAS", "1")),
             broker_required=os.environ.get("AGENT_BRIDGE_BROKER_REQUIRED", "0") == "1",
             nats_credentials_file=Path(credentials) if credentials else None,
             nats_username=os.environ.get("AGENT_BRIDGE_NATS_USERNAME"),
@@ -77,24 +77,10 @@ class Settings:
             nats_client_name=os.environ.get(
                 "AGENT_BRIDGE_NATS_CLIENT_NAME", "agent-bridge-catalog"
             ),
-            result_consumer_durable=os.environ.get(
-                "AGENT_BRIDGE_RESULT_CONSUMER", "catalog-execution-results-v1"
+            discovery_interval_seconds=float(
+                os.environ.get("AGENT_BRIDGE_DISCOVERY_INTERVAL_SECONDS", "10")
             ),
-            coordinator_enabled=os.environ.get("AGENT_BRIDGE_COORDINATOR_ENABLED", "0") == "1",
-            coordinator_holder_id=os.environ.get(
-                "AGENT_BRIDGE_COORDINATOR_HOLDER_ID", "catalog-portfolio-runtime"
-            ),
-            coordinator_model=os.environ.get("AGENT_BRIDGE_COORDINATOR_MODEL") or None,
-            coordinator_workspace=(
-                Path(value)
-                if (value := os.environ.get("AGENT_BRIDGE_COORDINATOR_WORKSPACE"))
-                else None
-            ),
-            coordinator_lease_seconds=float(
-                os.environ.get("AGENT_BRIDGE_COORDINATOR_LEASE_SECONDS", "300")
-            ),
-            metrics_enabled=os.environ.get("AGENT_BRIDGE_METRICS_ENABLED", "0") == "1",
-            telemetry_interval_seconds=float(
-                os.environ.get("AGENT_BRIDGE_TELEMETRY_INTERVAL_SECONDS", "30")
+            full_reconciliation_interval_seconds=float(
+                os.environ.get("AGENT_BRIDGE_FULL_RECONCILIATION_SECONDS", "300")
             ),
         )

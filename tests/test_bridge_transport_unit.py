@@ -9,12 +9,9 @@ from agent_bridge_bridge.codec import EnvelopeCodecError, decode_envelope, encod
 from agent_bridge_bridge.idempotency import ClaimResult, InMemoryIdempotencyStore
 from agent_bridge_bridge.subjects import (
     SubjectError,
-    capability_subject,
-    control_subject,
     dead_letter_subject,
     event_subject,
     inbox_subject,
-    result_subject,
     room_subject,
     subject_for,
     validate_subject,
@@ -33,7 +30,7 @@ def envelope(*, destination: EndpointRef | None = None) -> BridgeEnvelope:
     return BridgeEnvelope(
         message_id="msg-1",
         kind=MessageKind.REQUEST,
-        sender=EndpointRef(kind=EndpointKind.ROLE, id="role-source"),
+        sender=EndpointRef(kind=EndpointKind.CONVERSATION, id="chat-source"),
         destination=destination or EndpointRef(kind=EndpointKind.NODE, id="node-a"),
         correlation_id="correlation-1",
         body={"instruction": "test"},
@@ -44,16 +41,13 @@ def envelope(*, destination: EndpointRef | None = None) -> BridgeEnvelope:
 def test_subject_families_are_canonical_and_safe() -> None:
     node = EndpointRef(kind=EndpointKind.NODE, id="node-a")
     assert inbox_subject(node) == "bridge.v1.inbox.node.node-a"
-    assert capability_subject("robot-test") == "bridge.v1.capability.robot-test"
     assert room_subject("planning") == "bridge.v1.room.planning"
-    assert result_subject("request-1") == "bridge.v1.result.request-1"
-    assert control_subject(node) == "bridge.v1.control.node.node-a"
     assert event_subject("progress") == "bridge.v1.event.progress"
     assert dead_letter_subject(inbox_subject(node)) == "bridge.v1.dead.inbox"
     assert subject_for(envelope()) == inbox_subject(node)
     assert subject_for(
-        envelope(destination=EndpointRef(kind=EndpointKind.CAPABILITY, id="robot-test"))
-    ) == capability_subject("robot-test")
+        envelope(destination=EndpointRef(kind=EndpointKind.ROOM, id="planning"))
+    ) == room_subject("planning")
     assert validate_subject("bridge.v1.inbox.node.node-a") == "bridge.v1.inbox.node.node-a"
 
 

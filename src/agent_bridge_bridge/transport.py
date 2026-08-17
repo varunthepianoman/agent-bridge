@@ -343,7 +343,6 @@ class JetStreamTransport:
                     "source_id": envelope.sender.id,
                     "destination_kind": str(envelope.destination.kind),
                     "destination_id": envelope.destination.id,
-                    "work_id": envelope.work_id,
                     "expires_at": (
                         envelope.delivery.expires_at.isoformat()
                         if envelope.delivery.expires_at is not None
@@ -407,7 +406,7 @@ def _stream_for_subject(subject: str) -> str:
         return EVENTS_STREAM
     if family == "dead":
         return DEAD_LETTER_STREAM
-    if family in {"inbox", "capability", "room", "result", "control"}:
+    if family in {"inbox", "room"}:
         return WORK_STREAM
     raise ValueError(f"unsupported Bridge subject family: {family}")
 

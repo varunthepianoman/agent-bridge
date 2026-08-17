@@ -15,5 +15,5 @@ For a native Claude subagent, the Catalog resumes the owning root session; it do
 the child is an independently resumable endpoint. Native launch remains user-triggered and refuses
 to fall back to another environment when the owning node is unavailable.
 
-Codex remains the first unattended coordinator/runner provider. The Claude adapter added here is a
+Codex and Claude are equal catalog and conversation-turn providers. The Claude adapter is a
 Catalog discovery and native-recovery adapter, not authorization for autonomous Claude execution.

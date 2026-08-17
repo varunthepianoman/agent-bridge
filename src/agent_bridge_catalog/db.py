@@ -33,11 +33,15 @@ class ConversationRow(Base):
     )
 
     conversation_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    conversation_number: Mapped[int | None] = mapped_column(Integer, unique=True, index=True)
     provider: Mapped[str] = mapped_column(String(32), index=True)
     provider_thread_id: Mapped[str] = mapped_column(String(160), index=True)
     node_id: Mapped[str] = mapped_column(String(160), index=True)
     environment_id: Mapped[str] = mapped_column(String(160), index=True)
     title: Mapped[str] = mapped_column(Text, default="Untitled conversation")
+    alias: Mapped[str] = mapped_column(Text, default="Untitled conversation")
+    alias_updated_by: Mapped[str] = mapped_column(String(40), default="provider")
+    alias_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     provider_title: Mapped[str | None] = mapped_column(Text)
     preview: Mapped[str] = mapped_column(Text, default="")
     transcript_text: Mapped[str] = mapped_column(Text, default="")
@@ -49,6 +53,9 @@ class ConversationRow(Base):
     commit_hash: Mapped[str | None] = mapped_column(String(80))
     parent_provider_thread_id: Mapped[str | None] = mapped_column(String(160))
     parent_conversation_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    conversation_kind: Mapped[str] = mapped_column(String(40), default="full", index=True)
+    delivery_mode: Mapped[str] = mapped_column(String(40), default="direct", index=True)
+    selected: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -68,11 +75,15 @@ class ConversationRow(Base):
     def as_dict(self, *, include_transcript: bool = False) -> dict[str, Any]:
         result: dict[str, Any] = {
             "conversation_id": self.conversation_id,
+            "conversation_number": self.conversation_number,
             "provider": self.provider,
             "provider_thread_id": self.provider_thread_id,
             "node_id": self.node_id,
             "environment_id": self.environment_id,
             "title": self.title,
+            "alias": self.alias,
+            "alias_updated_by": self.alias_updated_by,
+            "alias_updated_at": _iso(self.alias_updated_at),
             "provider_title": self.provider_title,
             "preview": self.preview,
             "status": self.status,
@@ -82,6 +93,9 @@ class ConversationRow(Base):
             "branch": self.branch,
             "commit_hash": self.commit_hash,
             "parent_conversation_id": self.parent_conversation_id,
+            "conversation_kind": self.conversation_kind,
+            "delivery_mode": self.delivery_mode,
+            "selected": self.selected,
             "created_at": _iso(self.created_at),
             "last_activity_at": _iso(self.last_activity_at),
             "last_synced_at": _iso(self.last_synced_at),
@@ -96,6 +110,113 @@ class ConversationRow(Base):
             result["transcript_text"] = self.transcript_text
             result["raw_metadata"] = json.loads(self.raw_metadata_json)
         return result
+
+
+class CollectionRow(Base):
+    __tablename__ = "collections"
+
+    collection_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    name: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(Text, default="")
+    kind: Mapped[str] = mapped_column(String(40), default="manual", index=True)
+    filter_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class CollectionMemberRow(Base):
+    __tablename__ = "collection_members"
+
+    collection_id: Mapped[str] = mapped_column(
+        ForeignKey("collections.collection_id", ondelete="CASCADE"), primary_key=True
+    )
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.conversation_id", ondelete="CASCADE"), primary_key=True
+    )
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ConversationMessageRow(Base):
+    __tablename__ = "conversation_messages"
+
+    message_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    correlation_id: Mapped[str] = mapped_column(String(160), index=True)
+    causation_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    source_conversation_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    target_conversation_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    room_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    actor_kind: Mapped[str] = mapped_column(String(40), default="human", index=True)
+    operation: Mapped[str] = mapped_column(String(40), default="message", index=True)
+    body: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(String(40), default="queued", index=True)
+    subject: Mapped[str | None] = mapped_column(String(320), index=True)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class RoomRow(Base):
+    __tablename__ = "rooms"
+
+    room_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    name: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class RoomMemberRow(Base):
+    __tablename__ = "room_members"
+
+    room_id: Mapped[str] = mapped_column(
+        ForeignKey("rooms.room_id", ondelete="CASCADE"), primary_key=True
+    )
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.conversation_id", ondelete="CASCADE"), primary_key=True
+    )
+    delivery_mode: Mapped[str] = mapped_column(String(40), default="wake")
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AttentionRow(Base):
+    __tablename__ = "attention_items"
+
+    attention_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    category: Mapped[str] = mapped_column(String(40), index=True)
+    kind: Mapped[str] = mapped_column(String(80), index=True)
+    title: Mapped[str] = mapped_column(Text)
+    detail: Mapped[str] = mapped_column(Text, default="")
+    acknowledged: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NatsEventRow(Base):
+    __tablename__ = "nats_events"
+
+    event_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    category: Mapped[str] = mapped_column(String(40), index=True)
+    direction: Mapped[str | None] = mapped_column(String(20), index=True)
+    severity: Mapped[str] = mapped_column(String(20), default="info", index=True)
+    subject: Mapped[str | None] = mapped_column(String(320), index=True)
+    message_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    node_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    detail_json: Mapped[str] = mapped_column(Text, default="{}")
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class LegacyExportRow(Base):
+    """One migration-time JSON snapshot of removed orchestration tables."""
+
+    __tablename__ = "legacy_exports"
+
+    export_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    source_revision: Mapped[str] = mapped_column(String(40))
+    data_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class WorkItemRow(Base):
@@ -598,7 +719,28 @@ class Database:
         self.sessions = sessionmaker(self.engine, expire_on_commit=False)
 
     def initialize(self) -> None:
-        Base.metadata.create_all(self.engine)
+        core_table_names = (
+            "conversations",
+            "collections",
+            "collection_members",
+            "conversation_messages",
+            "rooms",
+            "room_members",
+            "attention_items",
+            "nats_events",
+            "legacy_exports",
+            "nodes",
+            "environments",
+            "node_commands",
+            "broker_messages",
+            "broker_deliveries",
+            "broker_dead_letters",
+            "broker_consumer_states",
+        )
+        Base.metadata.create_all(
+            self.engine,
+            tables=[Base.metadata.tables[name] for name in core_table_names],
+        )
         with self.engine.begin() as connection:
             connection.exec_driver_sql(
                 """

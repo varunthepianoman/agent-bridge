@@ -37,7 +37,6 @@ class BrokerProjectionObserver:
             destination_kind=_text(detail.get("destination_kind")),
             destination_id=_text(detail.get("destination_id")),
             correlation_id=activity.correlation_id,
-            work_id=_text(detail.get("work_id")),
             size_bytes=_integer(detail.get("encoded_size")),
             expires_at=_datetime(detail.get("expires_at")),
             payload_summary={"duplicate": bool(detail.get("duplicate", False))}

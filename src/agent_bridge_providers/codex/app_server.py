@@ -204,6 +204,37 @@ class AppServerClient:
         )
         return self._require_mapping(result.get("thread"), "thread/read result.thread")
 
+    async def start_thread(self, *, cwd: str) -> Mapping[str, Any]:
+        result = self._require_mapping(
+            await self.request("thread/start", {"cwd": cwd}),
+            "thread/start result",
+        )
+        return self._require_mapping(result.get("thread"), "thread/start result.thread")
+
+    async def resume_thread(self, thread_id: str, *, cwd: str | None = None) -> Mapping[str, Any]:
+        params: dict[str, Any] = {"threadId": thread_id}
+        if cwd is not None:
+            params["cwd"] = cwd
+        result = self._require_mapping(
+            await self.request("thread/resume", params),
+            "thread/resume result",
+        )
+        return self._require_mapping(result.get("thread"), "thread/resume result.thread")
+
+    async def start_turn(self, thread_id: str, prompt: str) -> Mapping[str, Any]:
+        result = self._require_mapping(
+            await self.request(
+                "turn/start",
+                {
+                    "threadId": thread_id,
+                    "input": [{"type": "text", "text": prompt}],
+                },
+            ),
+            "turn/start result",
+        )
+        turn = result.get("turn")
+        return self._require_mapping(turn, "turn/start result.turn")
+
     async def _ensure_ready(self) -> None:
         if self.is_ready:
             return

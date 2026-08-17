@@ -9,4 +9,5 @@ def create_app(*args: Any, **kwargs: Any) -> Any:
 
     return _create_app(*args, **kwargs)
 
+
 __all__ = ["create_app"]

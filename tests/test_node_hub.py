@@ -197,7 +197,7 @@ def test_environment_identity_is_scoped_to_owning_node(tmp_path: Path) -> None:
         )
         assert response.status_code == 200
 
-    _rows, total = repository.list(include_hidden=True)
+    _rows, total = repository.list(include_hidden=True, selected_only=False)
     assert total == 2
     nodes = client.get("/api/v1/nodes").json()["items"]
     assert {node["node_id"] for node in nodes} == {"node-a", "node-b"}
@@ -275,13 +275,16 @@ def test_authoritative_resume_routes_to_owner_and_refuses_offline_fallback(
             headers=headers,
         )
         assert synced.status_code == 200
-        conversation = client.get("/api/v1/conversations").json()["items"][0]
+        candidate = client.get("/api/v1/conversations/candidates").json()["items"][0]
+        conversation = client.post(
+            "/api/v1/conversations/import",
+            json={"conversation_ids": [candidate["conversation_id"]]},
+        ).json()["items"][0]
         assert conversation["node_reachable"] is True
         assert conversation["environment_available"] is True
 
         resumed = client.post(
-            "/api/v1/actions/resume",
-            json={"conversation_id": conversation["conversation_id"], "launch": True},
+            f"/api/v1/conversations/{conversation['conversation_id']}/open",
         )
         assert resumed.status_code == 200
         assert resumed.json()["queued"] is True
@@ -299,11 +302,7 @@ def test_authoritative_resume_routes_to_owner_and_refuses_offline_fallback(
             row.heartbeat_expires_at = datetime.now(UTC) - timedelta(seconds=1)
             session.commit()
         unavailable = client.post(
-            "/api/v1/actions/resume",
-            json={"conversation_id": conversation["conversation_id"], "launch": True},
+            f"/api/v1/conversations/{conversation['conversation_id']}/open",
         )
         assert unavailable.status_code == 409
-        assert unavailable.json()["detail"]["command"] == (
-            "codex resume remote-thread -C /remote/work"
-        )
-        assert "no fallback" in unavailable.json()["detail"]["message"]
+        assert "unavailable" in unavailable.json()["detail"]

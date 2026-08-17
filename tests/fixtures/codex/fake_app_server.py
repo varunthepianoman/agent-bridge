@@ -119,6 +119,26 @@ for raw_line in sys.stdin:
                     }
                 ]
             send({"id": request_id, "result": {"thread": result}})
+    elif method == "thread/start":
+        thread = {"id": "thr_new", "cwd": params.get("cwd"), "status": {"type": "idle"}}
+        send({"id": request_id, "result": {"thread": thread}})
+        send({"method": "thread/started", "params": {"thread": thread}})
+    elif method == "thread/resume":
+        send(
+            {
+                "id": request_id,
+                "result": {"thread": {"id": params.get("threadId"), "cwd": params.get("cwd")}},
+            }
+        )
+    elif method == "turn/start":
+        turn = {"id": "turn_new", "status": "inProgress", "items": []}
+        send({"id": request_id, "result": {"turn": turn}})
+        send(
+            {
+                "method": "turn/completed",
+                "params": {"turn": {**turn, "status": "completed"}},
+            }
+        )
     elif method == "test/echo":
         threading.Thread(target=delayed_echo, args=(request_id, params), daemon=True).start()
     elif method == "test/malformed":

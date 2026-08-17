@@ -1,572 +1,145 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Activity,
-  Archive,
+  Bell,
   Bot,
-  BriefcaseBusiness,
-  CircleDot,
-  EyeOff,
+  Check,
+  CircleAlert,
   Inbox,
-  Network,
-  PanelLeftClose,
-  Pin,
+  MessageSquare,
+  Monitor,
+  Plus,
   RadioTower,
   RefreshCw,
   Search,
-  Sparkles,
+  Send,
+  Users,
 } from "lucide-react";
 import {
-  approveConvergenceImplementation,
-  approveConvergencePublish,
-  attachConversation,
-  createRelationship,
-  createRole,
-  createWorkItem,
-  deleteRelationship,
-  detachConversation,
-  getConversation,
-  getWorkItem,
-  listConversations,
+  acknowledgeAttention,
+  attentionItems,
+  conversationCandidates,
+  coreConversation,
+  coreConversations,
+  coreMessages,
+  createRoom,
+  importConversations,
   listNodes,
-  listRelationships,
-  listRoles,
-  listWorkItems,
-  resumeConversation,
-  syncCatalog,
-  updateConversation,
-  updateWorkItem,
+  natsActivity,
+  natsSummary,
+  openCoreConversation,
+  reconcileCore,
+  rooms,
+  sendCoreMessage,
 } from "./api";
-import { ConversationDetail } from "./components/ConversationDetail";
-import { ConversationList } from "./components/ConversationList";
-import { CoordinatorCenter } from "./components/CoordinatorCenter";
-import { NodeOverview } from "./components/NodeOverview";
-import { ManualBridge } from "./components/ManualBridge";
-import { WorkDetail } from "./components/WorkDetail";
-import { WorkPortfolio } from "./components/WorkPortfolio";
-import { OperationsCenter } from "./components/OperationsCenter";
-import type {
-  ConversationFilters,
-  ConversationPatch,
-  RelationshipInput,
-  RoleInput,
-  WorkItemInput,
-} from "./types";
 
-const initialFilters: ConversationFilters = {
-  query: "",
-  status: "all",
-  source: "all",
-  view: "all",
-};
+type Section = "conversations" | "attention" | "messages" | "rooms" | "nodes" | "nats";
 
 export function App() {
-  const queryClient = useQueryClient();
-  const [filters, setFilters] = useState(initialFilters);
-  const [queryDraft, setQueryDraft] = useState("");
-  const [selectedId, setSelectedId] = useState<string>();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [toast, setToast] = useState<string>();
-  const [section, setSection] = useState<
-    "work" | "conversations" | "nodes" | "manual" | "coordinator" | "operations"
-  >("work");
-  const [selectedWorkId, setSelectedWorkId] = useState<string>();
-  const [coordinatorTarget, setCoordinatorTarget] = useState<{
-    workId?: string;
-    roleId?: string;
-  }>({});
-
-  useEffect(() => {
-    const timer = window.setTimeout(
-      () => setFilters((current) => ({ ...current, query: queryDraft })),
-      220,
-    );
-    return () => window.clearTimeout(timer);
-  }, [queryDraft]);
-
-  const listQuery = useQuery({
-    queryKey: ["conversations", filters],
-    queryFn: () => listConversations(filters),
+  const cache = useQueryClient();
+  const [section, setSection] = useState<Section>("conversations");
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<string>();
+  const [composer, setComposer] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [candidateSelection, setCandidateSelection] = useState<Set<string>>(new Set());
+  const conversations = useQuery({
+    queryKey: ["core-conversations", search],
+    queryFn: () => coreConversations(search),
+    refetchInterval: 10_000,
   });
-  const conversations = listQuery.data?.items ?? [];
-  useEffect(() => {
-    if (!selectedId && conversations.length) setSelectedId(conversations[0].id);
-  }, [conversations, selectedId]);
-
-  const detailQuery = useQuery({
-    queryKey: ["conversation", selectedId],
-    queryFn: () => getConversation(selectedId!),
-    enabled: Boolean(selectedId),
+  const attention = useQuery({ queryKey: ["attention"], queryFn: attentionItems, refetchInterval: 5_000 });
+  const unread = attention.data?.items.filter((item) => !item.acknowledged).length ?? 0;
+  const detail = useQuery({
+    queryKey: ["core-conversation", selected],
+    queryFn: () => coreConversation(selected!),
+    enabled: Boolean(selected),
   });
-  const workListQuery = useQuery({
-    queryKey: ["work-items"],
-    queryFn: listWorkItems,
-    refetchInterval: section === "work" ? 5_000 : false,
+  const candidates = useQuery({
+    queryKey: ["candidates"],
+    queryFn: conversationCandidates,
+    enabled: adding,
   });
-  const nodesQuery = useQuery({
-    queryKey: ["nodes"],
-    queryFn: listNodes,
-    enabled: section === "nodes",
+  const refresh = () => Promise.all([
+    cache.invalidateQueries({ queryKey: ["core-conversations"] }),
+    cache.invalidateQueries({ queryKey: ["candidates"] }),
+  ]);
+  const reconcile = useMutation({ mutationFn: reconcileCore, onSuccess: refresh });
+  const importMutation = useMutation({
+    mutationFn: () => importConversations([...candidateSelection]),
+    onSuccess: async () => { await refresh(); setAdding(false); setCandidateSelection(new Set()); },
   });
-  const workItems = workListQuery.data ?? [];
-  useEffect(() => {
-    if (!selectedWorkId && workItems.length) setSelectedWorkId(workItems[0].id);
-    if (
-      selectedWorkId &&
-      workItems.length &&
-      !workItems.some((item) => item.id === selectedWorkId)
-    )
-      setSelectedWorkId(workItems[0].id);
-  }, [selectedWorkId, workItems]);
-  const workDetailQuery = useQuery({
-    queryKey: ["work-item", selectedWorkId],
-    queryFn: () => getWorkItem(selectedWorkId!),
-    enabled: Boolean(selectedWorkId),
-    refetchInterval: section === "work" ? 5_000 : false,
+  const send = useMutation({
+    mutationFn: () => sendCoreMessage({ body: composer, target_conversation_id: selected }),
+    onSuccess: async () => { setComposer(""); await cache.invalidateQueries({ queryKey: ["messages"] }); },
   });
-  const rolesQuery = useQuery({
-    queryKey: ["roles", selectedWorkId],
-    queryFn: () => listRoles(selectedWorkId),
-    enabled: Boolean(selectedWorkId),
-    refetchInterval: section === "work" ? 5_000 : false,
-  });
-  const relationshipsQuery = useQuery({
-    queryKey: ["relationships", selectedWorkId],
-    queryFn: () => listRelationships(selectedWorkId),
-    enabled: Boolean(selectedWorkId),
-  });
-  const sources = useMemo(
-    () =>
-      [
-        ...new Set(
-          conversations.map((item) => item.source_kind).filter(Boolean),
-        ),
-      ] as string[],
-    [conversations],
-  );
-
-  const notify = (message: string) => {
-    setToast(message);
-    window.setTimeout(() => setToast(undefined), 2600);
-  };
-  const syncMutation = useMutation({
-    mutationFn: syncCatalog,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["conversations"] });
-      notify("Catalog sync completed");
-    },
-    onError: (error: Error) => notify(error.message),
-  });
-  const updateMutation = useMutation({
-    mutationFn: (patch: ConversationPatch) =>
-      updateConversation(selectedId!, patch),
-    onSuccess: (conversation) => {
-      queryClient.setQueryData(["conversation", selectedId], conversation);
-      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
-      notify("Conversation updated");
-    },
-    onError: (error: Error) => notify(error.message),
-  });
-  const resumeMutation = useMutation({
-    mutationFn: () => resumeConversation(selectedId!),
-    onSuccess: (result) =>
-      notify(result.message || "Opening conversation on its native node"),
-    onError: (error: Error) => notify(error.message),
-  });
-  const refreshWork = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["work-items"] }),
-      queryClient.invalidateQueries({
-        queryKey: ["work-item", selectedWorkId],
-      }),
-      queryClient.invalidateQueries({ queryKey: ["roles", selectedWorkId] }),
-      queryClient.invalidateQueries({
-        queryKey: ["relationships", selectedWorkId],
-      }),
-    ]);
-  };
-  const createWorkMutation = useMutation({
-    mutationFn: createWorkItem,
-    onSuccess: async (work) => {
-      setSelectedWorkId(work.id);
-      await refreshWork();
-      notify("Work item created");
-    },
-    onError: (error: Error) => notify(error.message),
-  });
-  const updateWorkMutation = useMutation({
-    mutationFn: (input: Partial<WorkItemInput>) =>
-      updateWorkItem(selectedWorkId!, input),
-    onSuccess: async () => {
-      await refreshWork();
-      notify("Work item updated");
-    },
-    onError: (error: Error) => notify(error.message),
-  });
-  const attachMutation = useMutation({
-    mutationFn: (id: string) => attachConversation(selectedWorkId!, id),
-    onSuccess: async () => {
-      await refreshWork();
-      notify("Conversation attached");
-    },
-    onError: (error: Error) => notify(error.message),
-  });
-  const detachMutation = useMutation({
-    mutationFn: (id: string) => detachConversation(selectedWorkId!, id),
-    onSuccess: async () => {
-      await refreshWork();
-      notify("Conversation removed");
-    },
-    onError: (error: Error) => notify(error.message),
-  });
-  const roleMutation = useMutation({
-    mutationFn: (input: RoleInput) => createRole(input),
-    onSuccess: async () => {
-      await refreshWork();
-      notify("Durable role created");
-    },
-    onError: (error: Error) => notify(error.message),
-  });
-  const relationshipMutation = useMutation({
-    mutationFn: (input: RelationshipInput) => createRelationship(input),
-    onSuccess: async () => {
-      await refreshWork();
-      notify("Relationship created");
-    },
-    onError: (error: Error) => notify(error.message),
-  });
-  const deleteRelationshipMutation = useMutation({
-    mutationFn: deleteRelationship,
-    onSuccess: async () => {
-      await refreshWork();
-      notify("Relationship removed");
-    },
-    onError: (error: Error) => notify(error.message),
-  });
-  const approvePublishMutation = useMutation({
-    mutationFn: () => approveConvergencePublish(selectedWorkId!),
-    onSuccess: async () => {
-      await refreshWork();
-      notify("Push and post approved");
-    },
-    onError: (error: Error) => notify(error.message),
-  });
-  const approveImplementationMutation = useMutation({
-    mutationFn: () => approveConvergenceImplementation(selectedWorkId!),
-    onSuccess: async () => {
-      await refreshWork();
-      notify("Implementation approved and queued");
-    },
-    onError: (error: Error) => notify(error.message),
-  });
-
-  return (
-    <main className="app-shell">
-      <aside className={`sidebar ${sidebarOpen ? "" : "collapsed"}`}>
-        <div className="brand">
-          <span className="brand-mark">
-            <Sparkles size={18} />
-          </span>
-          <div>
-            <strong>Agent Bridge</strong>
-            <span>Work Catalog</span>
-          </div>
+  const nav: Array<[Section, string, React.ReactNode]> = [
+    ["conversations", "Conversations", <Inbox size={18} />],
+    ["attention", `Attention${unread ? ` · ${unread}` : ""}`, <Bell size={18} />],
+    ["messages", "Messages", <MessageSquare size={18} />],
+    ["rooms", "Rooms", <Users size={18} />],
+    ["nodes", "Machines", <Monitor size={18} />],
+    ["nats", "NATS", <RadioTower size={18} />],
+  ];
+  return <div className="hub-shell">
+    <aside className="hub-nav">
+      <div className="hub-brand"><span className="brand-mark"><Bot size={19} /></span><div><strong>Agent Bridge</strong><small>Private conversation network</small></div></div>
+      <nav>{nav.map(([key, label, icon]) => <button className={section === key ? "active" : ""} onClick={() => setSection(key)} key={key}>{icon}<span>{label}</span></button>)}</nav>
+      <div className="hub-status"><span className="online-dot" /> Single-user hub</div>
+    </aside>
+    <main className="hub-main">
+      {section === "conversations" && <>
+        <header className="page-head"><div><h1>Conversations</h1><p>Your selected Codex and Claude chats across every machine.</p></div><div className="head-actions"><button onClick={() => reconcile.mutate()}><RefreshCw size={16} /> Reconcile</button><button className="primary" onClick={() => setAdding(true)}><Plus size={16} /> Add chats</button></div></header>
+        <div className="conversation-layout">
+          <section className="directory-pane"><label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search alias, title, project, machine…" /></label>
+            <div className="chat-list">{conversations.data?.items.map((chat) => <button key={chat.conversation_id} className={selected === chat.conversation_id ? "chat-card selected" : "chat-card"} onClick={() => setSelected(chat.conversation_id)}><span className={`provider ${chat.provider}`}>{chat.provider.slice(0, 1).toUpperCase()}</span><span><strong>{chat.display_name}</strong><small>{chat.provider} · {chat.node_id}/{chat.environment_id}</small><em>{chat.preview || "No preview available"}</em></span><i className={`state ${chat.status}`} /></button>)}</div>
+          </section>
+          <section className="detail-pane">{detail.data ? <><div className="detail-title"><div><span className="eyebrow">{detail.data.provider} · {detail.data.conversation_kind.replace("_", " ")}</span><h2>{detail.data.display_name}</h2><p>{detail.data.provider_title && detail.data.provider_title !== detail.data.alias ? `Provider title: ${detail.data.provider_title}` : detail.data.cwd}</p></div><button onClick={() => openCoreConversation(detail.data.conversation_id)}>Open native</button></div>
+            <div className="facts"><span><small>Machine</small>{detail.data.node_id}</span><span><small>Environment</small>{detail.data.environment_id}</span><span><small>Delivery</small>{detail.data.delivery_mode}</span><span><small>Status</small>{detail.data.status}</span></div>
+            <pre className="transcript">{detail.data.transcript_text || detail.data.preview || "Transcript will appear after the next reconciliation."}</pre>
+            <form className="composer" onSubmit={(event) => { event.preventDefault(); if (composer.trim()) send.mutate(); }}><textarea value={composer} onChange={(event) => setComposer(event.target.value)} placeholder="Send an authenticated Bridge message as a normal user turn…" /><button className="primary" disabled={!composer.trim() || !detail.data.capabilities.can_message}><Send size={16} /> Send</button></form>
+          </> : <div className="empty"><MessageSquare size={34} /><h2>Select a conversation</h2><p>Inspect its location, status, transcript, and message history.</p></div>}</section>
         </div>
-        <nav aria-label="Catalog views">
-          <NavItem
-            icon={<BriefcaseBusiness size={16} />}
-            label="Focused work"
-            active={section === "work"}
-            count={workItems.length}
-            onClick={() => setSection("work")}
-          />
-          <NavItem
-            icon={<Activity size={16} />}
-            label="Operations"
-            active={section === "operations"}
-            onClick={() => setSection("operations")}
-          />
-          <NavItem
-            icon={<Bot size={16} />}
-            label="Coordinator"
-            active={section === "coordinator"}
-            onClick={() => {
-              setCoordinatorTarget({});
-              setSection("coordinator");
-            }}
-          />
-          <NavItem
-            icon={<Network size={16} />}
-            label="Nodes"
-            active={section === "nodes"}
-            count={nodesQuery.data?.length}
-            onClick={() => setSection("nodes")}
-          />
-          <NavItem
-            icon={<RadioTower size={16} />}
-            label="Manual Bridge"
-            active={section === "manual"}
-            onClick={() => setSection("manual")}
-          />
-          <div className="nav-separator" />
-          <NavItem
-            icon={<Inbox size={16} />}
-            label="All conversations"
-            active={section === "conversations" && filters.view === "all"}
-            count={listQuery.data?.total}
-            onClick={() => {
-              setSection("conversations");
-              setFilters((value) => ({ ...value, view: "all" }));
-            }}
-          />
-          <NavItem
-            icon={<Pin size={16} />}
-            label="Pinned"
-            active={section === "conversations" && filters.view === "pinned"}
-            onClick={() => {
-              setSection("conversations");
-              setFilters((value) => ({ ...value, view: "pinned" }));
-            }}
-          />
-          <NavItem
-            icon={<Archive size={16} />}
-            label="Archived"
-            active={section === "conversations" && filters.view === "archived"}
-            onClick={() => {
-              setSection("conversations");
-              setFilters((value) => ({ ...value, view: "archived" }));
-            }}
-          />
-          <NavItem
-            icon={<EyeOff size={16} />}
-            label="Hidden"
-            active={section === "conversations" && filters.view === "hidden"}
-            onClick={() => {
-              setSection("conversations");
-              setFilters((value) => ({ ...value, view: "hidden" }));
-            }}
-          />
-        </nav>
-        <div className="sidebar-footer">
-          <span className="online-dot" />
-          Local catalog connected
-        </div>
-      </aside>
-
-      <section className="workspace">
-        <header className="topbar">
-          <button
-            className="icon-button sidebar-toggle"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            title="Toggle navigation"
-          >
-            <PanelLeftClose size={17} />
-          </button>
-          <div className="search-box">
-            <Search size={17} />
-            <input
-              aria-label="Search conversations"
-              value={queryDraft}
-              onFocus={() => setSection("conversations")}
-              onChange={(event) => setQueryDraft(event.target.value)}
-              placeholder="Search every Codex conversation…"
-            />
-            <kbd>⌘ K</kbd>
-          </div>
-          <button
-            className="secondary-button"
-            onClick={() => syncMutation.mutate()}
-            disabled={syncMutation.isPending}
-          >
-            <RefreshCw
-              size={15}
-              className={syncMutation.isPending ? "spinning" : ""}
-            />
-            Sync
-          </button>
-        </header>
-        {section === "operations" ? (
-          <OperationsCenter />
-        ) : section === "coordinator" ? (
-          <CoordinatorCenter
-            key={`${coordinatorTarget.workId || "portfolio"}:${coordinatorTarget.roleId || ""}`}
-            workItems={workItems}
-            initialWorkId={coordinatorTarget.workId}
-            initialRoleId={coordinatorTarget.roleId}
-            onOpenManual={() => setSection("manual")}
-          />
-        ) : section === "manual" ? (
-          <ManualBridge />
-        ) : section === "nodes" ? (
-          <NodeOverview
-            nodes={nodesQuery.data ?? []}
-            loading={nodesQuery.isLoading}
-            error={nodesQuery.isError ? nodesQuery.error.message : undefined}
-            onRetry={() => void nodesQuery.refetch()}
-          />
-        ) : section === "conversations" ? (
-          <div className="catalog-layout">
-            <section className="list-panel">
-              <div className="list-heading">
-                <div>
-                  <h1>{viewTitle(filters.view)}</h1>
-                  <span>
-                    {listQuery.data?.total ?? 0} conversations across your work
-                  </span>
-                </div>
-              </div>
-              <div className="filter-row">
-                <label>
-                  <span>Status</span>
-                  <select
-                    value={filters.status}
-                    onChange={(event) =>
-                      setFilters((value) => ({
-                        ...value,
-                        status: event.target.value,
-                      }))
-                    }
-                  >
-                    <option value="all">Any status</option>
-                    <option value="active">Active</option>
-                    <option value="idle">Idle</option>
-                    <option value="completed">Completed</option>
-                    <option value="failed">Failed</option>
-                  </select>
-                </label>
-                <label>
-                  <span>Source</span>
-                  <select
-                    value={filters.source}
-                    onChange={(event) =>
-                      setFilters((value) => ({
-                        ...value,
-                        source: event.target.value,
-                      }))
-                    }
-                  >
-                    <option value="all">All sources</option>
-                    <option value="vscode">VS Code</option>
-                    <option value="cli">CLI</option>
-                    <option value="appServer">App Server</option>
-                    {sources
-                      .filter(
-                        (source) =>
-                          !["vscode", "cli", "appServer"].includes(source),
-                      )
-                      .map((source) => (
-                        <option value={source} key={source}>
-                          {source}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-              </div>
-              {listQuery.isError ? (
-                <div className="error-banner">
-                  <CircleDot size={16} />
-                  {listQuery.error.message}
-                  <button onClick={() => listQuery.refetch()}>Retry</button>
-                </div>
-              ) : (
-                <ConversationList
-                  conversations={conversations}
-                  selectedId={selectedId}
-                  loading={listQuery.isLoading}
-                  onSelect={setSelectedId}
-                />
-              )}
-            </section>
-            <ConversationDetail
-              conversation={detailQuery.data}
-              loading={detailQuery.isLoading}
-              saving={updateMutation.isPending}
-              resuming={resumeMutation.isPending}
-              onUpdate={(patch) => updateMutation.mutate(patch)}
-              onResume={() => resumeMutation.mutate()}
-            />
-          </div>
-        ) : (
-          <div className="catalog-layout work-layout">
-            <WorkPortfolio
-              items={workItems}
-              selectedId={selectedWorkId}
-              loading={workListQuery.isLoading}
-              creating={createWorkMutation.isPending}
-              onSelect={setSelectedWorkId}
-              onCreate={(input) => createWorkMutation.mutate(input)}
-            />
-            <WorkDetail
-              work={workDetailQuery.data}
-              roles={rolesQuery.data ?? []}
-              relationships={relationshipsQuery.data ?? []}
-              allConversations={conversations}
-              loading={workDetailQuery.isLoading}
-              saving={updateWorkMutation.isPending}
-              approvingImplementation={approveImplementationMutation.isPending}
-              onApproveImplementation={() =>
-                approveImplementationMutation.mutate()
-              }
-              approvingPublish={approvePublishMutation.isPending}
-              onApprovePublish={() => approvePublishMutation.mutate()}
-              onUpdate={(input) => updateWorkMutation.mutate(input)}
-              onAttach={(id) => attachMutation.mutate(id)}
-              onDetach={(id) => detachMutation.mutate(id)}
-              onCreateRole={(input) => roleMutation.mutate(input)}
-              onCreateRelationship={(input) =>
-                relationshipMutation.mutate(input)
-              }
-              onDeleteRelationship={(id) =>
-                deleteRelationshipMutation.mutate(id)
-              }
-              onOpenConversation={(id) => {
-                setSelectedId(id);
-                setSection("conversations");
-              }}
-              onCoordinate={(workId, roleId) => {
-                setCoordinatorTarget({ workId, roleId });
-                setSection("coordinator");
-              }}
-            />
-          </div>
-        )}
-      </section>
-      {toast && (
-        <div className="toast" role="status">
-          {toast}
-        </div>
-      )}
+      </>}
+      {section === "attention" && <AttentionView />}
+      {section === "messages" && <MessagesView />}
+      {section === "rooms" && <RoomsView />}
+      {section === "nodes" && <NodesView />}
+      {section === "nats" && <NatsView />}
     </main>
-  );
+    {adding && <div className="modal-backdrop"><div className="modal"><header><div><h2>Add discovered chats</h2><p>This selects current chats only; future chats are not added automatically.</p></div><button onClick={() => setAdding(false)}>×</button></header><div className="modal-actions"><button onClick={() => setCandidateSelection(new Set(candidates.data?.items.map((item) => item.conversation_id)))}>Select all current</button><span>{candidateSelection.size} selected</span></div><div className="candidate-list">{candidates.data?.items.map((chat) => <label key={chat.conversation_id}><input type="checkbox" checked={candidateSelection.has(chat.conversation_id)} onChange={() => setCandidateSelection((current) => { const next = new Set(current); next.has(chat.conversation_id) ? next.delete(chat.conversation_id) : next.add(chat.conversation_id); return next; })} /><span><strong>{chat.alias}</strong><small>{chat.provider} · {chat.node_id}/{chat.environment_id}</small></span></label>)}</div><footer><button onClick={() => setAdding(false)}>Cancel</button><button className="primary" disabled={!candidateSelection.size} onClick={() => importMutation.mutate()}>Add {candidateSelection.size || ""} chats</button></footer></div></div>}
+  </div>;
 }
 
-function NavItem({
-  icon,
-  label,
-  active,
-  count,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  active: boolean;
-  count?: number;
-  onClick: () => void;
-}) {
-  return (
-    <button className={`nav-item ${active ? "active" : ""}`} onClick={onClick}>
-      {icon}
-      <span>{label}</span>
-      {count !== undefined && <em>{count}</em>}
-    </button>
-  );
+function AttentionView() {
+  const cache = useQueryClient();
+  const query = useQuery({ queryKey: ["attention"], queryFn: attentionItems, refetchInterval: 5_000 });
+  const acknowledge = useMutation({ mutationFn: acknowledgeAttention, onSuccess: () => cache.invalidateQueries({ queryKey: ["attention"] }) });
+  return <><PageTitle title="Attention" subtitle="Things that need you, separated from ordinary completion updates." /><div className="attention-grid">{["needs_attention", "update"].map((category) => <section className="panel" key={category}><h2>{category === "needs_attention" ? <><CircleAlert size={18} /> Needs attention</> : <><Check size={18} /> Updates</>}</h2>{query.data?.items.filter((item) => item.category === category).map((item) => <article className={item.acknowledged ? "attention-card read" : "attention-card"} key={item.attention_id}><strong>{item.title}</strong><p>{item.detail}</p><small>{new Date(item.created_at).toLocaleString()}</small>{!item.acknowledged && <button onClick={() => acknowledge.mutate(item.attention_id)}>Acknowledge</button>}</article>)}</section>)}</div></>;
 }
 
-function viewTitle(view: ConversationFilters["view"]) {
-  return {
-    all: "Conversations",
-    pinned: "Pinned conversations",
-    archived: "Archive",
-    hidden: "Hidden conversations",
-  }[view];
+function MessagesView() {
+  const query = useQuery({ queryKey: ["messages"], queryFn: coreMessages, refetchInterval: 5_000 });
+  return <><PageTitle title="Message history" subtitle="Incoming and outbound Bridge traffic with correlation and delivery state." /><section className="panel table-panel"><table><thead><tr><th>Time</th><th>Route</th><th>Message</th><th>Correlation</th><th>State</th></tr></thead><tbody>{query.data?.items.map((item) => <tr key={item.message_id}><td>{new Date(item.created_at).toLocaleString()}</td><td>{item.target_conversation_id || item.room_id}</td><td>{item.body}</td><td className="mono">{item.correlation_id}</td><td><span className={`pill ${item.state}`}>{item.state}</span></td></tr>)}</tbody></table></section></>;
 }
+
+function RoomsView() {
+  const cache = useQueryClient(); const [name, setName] = useState("");
+  const query = useQuery({ queryKey: ["rooms"], queryFn: rooms });
+  const create = useMutation({ mutationFn: () => createRoom(name), onSuccess: async () => { setName(""); await cache.invalidateQueries({ queryKey: ["rooms"] }); } });
+  return <><PageTitle title="Rooms" subtitle="Lightweight broadcast channels with wake, notify, or digest delivery." /><form className="inline-create" onSubmit={(event) => { event.preventDefault(); if (name.trim()) create.mutate(); }}><input value={name} onChange={(event) => setName(event.target.value)} placeholder="New room name" /><button className="primary"><Plus size={16} /> Create</button></form><div className="card-grid">{query.data?.items.map((room) => <article className="panel room-card" key={room.room_id}><Users /><h2>{room.name}</h2><p>{room.description || "No description"}</p><small>{room.members.length} members</small></article>)}</div></>;
+}
+
+function NodesView() {
+  const query = useQuery({ queryKey: ["nodes"], queryFn: listNodes, refetchInterval: 10_000 });
+  return <><PageTitle title="Machines & environments" subtitle="The execution locations that own your indexed conversations." /><div className="card-grid">{query.data?.map((node) => <article className="panel node-card" key={node.node_id}><div className="node-title"><Monitor /><div><h2>{node.display_name}</h2><p>{node.platform}</p></div><span className={node.reachable ? "online-dot" : "offline-dot"} /></div>{node.environments.map((environment) => <div className="environment" key={environment.environment_id}><strong>{environment.display_name || environment.environment_id}</strong><small>{environment.kind} · {environment.available ? "available" : "offline"}</small></div>)}</article>)}</div></>;
+}
+
+function NatsView() {
+  const summary = useQuery({ queryKey: ["nats-summary"], queryFn: natsSummary, refetchInterval: 5_000 });
+  const events = useQuery({ queryKey: ["nats-events"], queryFn: natsActivity, refetchInterval: 5_000 });
+  const broker = summary.data?.broker as Record<string, unknown> | undefined;
+  return <><PageTitle title="NATS server log" subtitle="Connections, publishes, deliveries, retries, dead letters, and server issues." /><div className="summary-strip"><span><small>Broker</small>{String(broker?.status ?? "unknown")}</span><span><small>Events</small>{String(summary.data?.events ?? 0)}</span><span><small>Issues</small>{String(summary.data?.issues ?? 0)}</span><span><small>Connected</small>{String(broker?.connected ?? false)}</span></div><section className="panel table-panel"><table><thead><tr><th>Time</th><th>Severity</th><th>Direction</th><th>Subject</th><th>Event</th></tr></thead><tbody>{events.data?.items.map((event) => <tr key={event.event_id}><td>{new Date(event.occurred_at).toLocaleString()}</td><td><span className={`pill ${event.severity}`}>{event.severity}</span></td><td>{event.direction}</td><td className="mono">{event.subject}</td><td>{String(event.detail.kind ?? event.category)}</td></tr>)}</tbody></table></section></>;
+}
+
+function PageTitle({ title, subtitle }: { title: string; subtitle: string }) { return <header className="page-head"><div><h1>{title}</h1><p>{subtitle}</p></div></header>; }

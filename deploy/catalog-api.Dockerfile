@@ -8,9 +8,6 @@ WORKDIR /app
 COPY pyproject.toml README.md alembic.ini ./
 COPY migrations ./migrations
 COPY src ./src
-# The private hub exposes coordinator intake as well as Manual Bridge. The
-# coordinator extra supplies the stable Python Codex SDK and its pinned runtime;
-# Manual Bridge remains available if coordinator activation is disabled/fails.
 RUN python -m pip install --no-cache-dir '.[codex]'
 
 RUN addgroup --system bridge && adduser --system --ingroup bridge bridge \
@@ -18,4 +15,4 @@ RUN addgroup --system bridge && adduser --system --ingroup bridge bridge \
 USER bridge
 
 EXPOSE 58081
-CMD ["agent-bridge-catalog", "--bind", "0.0.0.0", "--port", "58081"]
+CMD ["sh", "-c", "alembic upgrade head && exec agent-bridge serve --bind 0.0.0.0 --port 58081"]

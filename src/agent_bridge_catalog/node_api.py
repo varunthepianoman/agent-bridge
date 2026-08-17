@@ -125,13 +125,60 @@ def command_result(
     store = _store(request)
     _authenticate(store, payload.node_id, authorization)
     try:
-        return store.complete_command(
+        result = store.complete_command(
             node_id=payload.node_id,
             command_id=command_id,
             claim_token=payload.claim_token,
             status=payload.status,
             result={"detail": payload.detail, "output": payload.output},
         )
+        message_id = payload.output.get("message_id")
+        if isinstance(message_id, str):
+            request.app.state.messages.set_state(
+                message_id,
+                "delivered" if payload.status == "succeeded" else "failed",
+                error=payload.detail if payload.status != "succeeded" else None,
+            )
+            if payload.status == "succeeded":
+                request.app.state.attention.create(
+                    category="update",
+                    kind="turn_completed",
+                    title="Remote conversation finished a Bridge-delivered turn",
+                    conversation_id=result.get("conversation_id"),
+                    correlation_id=payload.output.get("correlation_id"),
+                )
+        if payload.status != "succeeded":
+            request.app.state.attention.create(
+                category="needs_attention",
+                kind="node_command_failed",
+                title=f"Remote action failed on {payload.node_id}",
+                detail=payload.detail or "Remote node reported a failure",
+                conversation_id=result.get("conversation_id"),
+            )
+        elif result.get("kind") == "start_conversation":
+            thread_id = payload.output.get("provider_thread_id")
+            if isinstance(thread_id, str) and thread_id:
+                row = request.app.state.repository.upsert_discovered(
+                    {
+                        "provider": result.get("provider", "codex"),
+                        "provider_thread_id": thread_id,
+                        "title": result.get("alias") or "New Bridge conversation",
+                        "preview": result.get("prompt", ""),
+                        "cwd": result.get("workspace"),
+                        "status": "idle",
+                        "source_kind": "agent_bridge",
+                    },
+                    node_id=payload.node_id,
+                    environment_id=result.get("environment_id", "host"),
+                )
+                row = request.app.state.repository.select([row.conversation_id])[0]
+                request.app.state.attention.create(
+                    category="update",
+                    kind="agent_started",
+                    title=f"Chat {row.conversation_number} was started remotely",
+                    conversation_id=row.conversation_id,
+                )
+        return result
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except NodeAuthenticationError as exc:

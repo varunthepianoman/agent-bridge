@@ -128,7 +128,7 @@ def test_dead_letters_consumer_snapshots_and_summary(
     }
 
 
-def test_projection_query_api(tmp_path: Path) -> None:
+def test_legacy_projection_query_api_is_removed(tmp_path: Path) -> None:
     settings = Settings(
         state_dir=tmp_path,
         database_url=f"sqlite:///{tmp_path / 'api.db'}",
@@ -139,20 +139,5 @@ def test_projection_query_api(tmp_path: Path) -> None:
     )
     app = create_app(settings=settings)
     with TestClient(app) as client:
-        store: BrokerProjectionStore = app.state.broker_projection_store
-        store.materialize_message(
-            message_id="msg-api",
-            subject="bridge.room.planning",
-            message_type="event",
-            state="published",
-            stream="BRIDGE_EVENTS",
-            correlation_id="corr-api",
-        )
-        response = client.get(
-            "/api/v1/bridge/operations/messages", params={"stream": "BRIDGE_EVENTS"}
-        )
-        assert response.status_code == 200
-        assert response.json()["items"][0]["message_id"] == "msg-api"
-        assert client.get("/api/v1/bridge/operations/messages/msg-api").status_code == 200
-        assert client.get("/api/v1/bridge/operations/messages/missing").status_code == 404
-        assert client.get("/api/v1/bridge/operations/summary").json()["messages"] == 1
+        assert client.get("/api/v1/bridge/operations/messages").status_code == 404
+        assert app.state.broker_projection.summary()["messages"] == 0

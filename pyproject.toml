@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-bridge"
-version = "0.2.0"
+version = "0.3.0"
 description = "A catalog and durable communication substrate for AI-assisted work"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -12,6 +12,7 @@ dependencies = [
   "alembic>=1.14,<2",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
+  "mcp>=1.12,<2",
   "nats-py>=2.11,<3",
   "pydantic>=2.10,<3",
   "sqlalchemy>=2.0,<3",
@@ -35,7 +36,7 @@ agent-bridge = "agent_bridge_bridge.cli:main"
 agent-bridge-catalog = "agent_bridge_catalog.cli:main"
 agent-bridge-node = "agent_bridge_node.cli:main"
 agent-bridge-maintenance = "agent_bridge_catalog.maintenance:main"
-agent-bridge-runner = "agent_bridge_bridge.runner_service:main"
+agent-bridge-mcp = "agent_bridge_mcp.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -57,4 +58,4 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-packages = ["agent_bridge_bridge", "agent_bridge_catalog", "agent_bridge_coordinator", "agent_bridge_integrations", "agent_bridge_node", "agent_bridge_protocol", "agent_bridge_providers"]
+packages = ["agent_bridge_bridge", "agent_bridge_catalog", "agent_bridge_mcp", "agent_bridge_node", "agent_bridge_protocol", "agent_bridge_providers"]

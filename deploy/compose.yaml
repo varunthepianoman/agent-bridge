@@ -8,10 +8,6 @@ services:
       NATS_ADMIN_PASSWORD: ${NATS_ADMIN_PASSWORD:?set NATS_ADMIN_PASSWORD}
       NATS_CATALOG_USER: ${NATS_CATALOG_USER:-catalog}
       NATS_CATALOG_PASSWORD: ${NATS_CATALOG_PASSWORD:?set NATS_CATALOG_PASSWORD}
-      NATS_NODE_A_USER: ${NATS_NODE_A_USER:-node-a}
-      NATS_NODE_A_PASSWORD: ${NATS_NODE_A_PASSWORD:?set NATS_NODE_A_PASSWORD}
-      NATS_NODE_B_USER: ${NATS_NODE_B_USER:-node-b}
-      NATS_NODE_B_PASSWORD: ${NATS_NODE_B_PASSWORD:?set NATS_NODE_B_PASSWORD}
     volumes:
       - ./nats/nats-server.conf:/etc/nats/nats-server.conf:ro
       - nats-state:/data/jetstream
@@ -40,7 +36,7 @@ services:
       AGENT_BRIDGE_NATS_SERVERS: nats://nats:4222
       AGENT_BRIDGE_NATS_USERNAME: ${NATS_CATALOG_USER:-catalog}
       AGENT_BRIDGE_NATS_PASSWORD: ${NATS_CATALOG_PASSWORD:?set NATS_CATALOG_PASSWORD}
-      AGENT_BRIDGE_RESULT_CONSUMER: catalog-execution-results-v1
+      AGENT_BRIDGE_DISCOVERY_INTERVAL_SECONDS: "10"
     volumes:
       - catalog-state:/var/lib/agent-bridge
     networks: [catalog-private]

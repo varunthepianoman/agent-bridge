@@ -50,6 +50,23 @@ class CodexAdapterTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_starts_resumes_and_completes_turns(self) -> None:
+        async def scenario() -> None:
+            async with make_client() as client:
+                thread = await client.start_thread(cwd="/tmp")
+                self.assertEqual(thread["id"], "thr_new")
+                resumed = await client.resume_thread("thr_new", cwd="/tmp")
+                self.assertEqual(resumed["id"], "thr_new")
+                turn = await client.start_turn("thr_new", "Check the socket")
+                self.assertEqual(turn["status"], "inProgress")
+                methods = set()
+                for _ in range(3):
+                    method, _params = await client.next_notification(timeout=1)
+                    methods.add(method)
+                self.assertIn("turn/completed", methods)
+
+        asyncio.run(scenario())
+
     def test_correlates_concurrent_out_of_order_responses(self) -> None:
         async def scenario() -> None:
             async with make_client() as client:

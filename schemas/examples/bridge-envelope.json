@@ -7,11 +7,13 @@
     "id": "conv-user"
   },
   "destination": {
-    "kind": "capability",
-    "id": "robot-test"
+    "kind": "conversation",
+    "id": "conversation-server-debug"
   },
   "body": {
-    "instruction": "Run reconnect validation"
+    "text": "Check the reconnect path on the server machine",
+    "operation": "request",
+    "actor_kind": "agent"
   },
   "correlation_id": "corr-contract-example",
   "delivery": {
@@ -22,4 +24,3 @@
   "artifacts": [],
   "extensions": {}
 }
-

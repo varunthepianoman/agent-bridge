@@ -114,7 +114,12 @@ class NodeAgent:
         commands = self.hub.claim_commands(self.settings.node_id)
         failed = 0
         for command in commands:
-            result = self.runner.execute(command)
+            heartbeat = asyncio.create_task(self._heartbeat_while_busy())
+            try:
+                result = await asyncio.to_thread(self.runner.execute, command)
+            finally:
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
             failed += result.status == "failed"
             self.hub.report_result(self.settings.node_id, result)
         heartbeat_ttl = max(15, min(600, round(self.settings.interval_seconds * 3)))
@@ -126,6 +131,20 @@ class NodeAgent:
             }
         )
         return NodeCycleResult(discovered, len(records), excluded, len(commands), failed)
+
+    async def _heartbeat_while_busy(self) -> None:
+        ttl = max(15, min(600, round(self.settings.interval_seconds * 3)))
+        while True:
+            await asyncio.to_thread(
+                self.hub.heartbeat,
+                {
+                    "node_id": self.settings.node_id,
+                    "ttl_seconds": ttl,
+                    "capabilities": ["catalog.collect", "native.resume", "native.open"],
+                    "metadata": {"busy": True},
+                },
+            )
+            await asyncio.sleep(self.settings.interval_seconds)
 
     async def serve(self) -> None:
         while True:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import json
 from collections.abc import Iterable
 from dataclasses import asdict, is_dataclass
@@ -46,10 +47,16 @@ class CatalogRepository:
             if row is None:
                 row = ConversationRow(
                     conversation_id=conversation_id,
+                    conversation_number=None,
                     provider=provider,
                     provider_thread_id=thread_id,
                     node_id=node_id,
                     environment_id=environment_id,
+                    alias="Untitled conversation",
+                    alias_updated_by="provider",
+                    conversation_kind="full",
+                    delivery_mode="direct",
+                    selected=False,
                     last_synced_at=now,
                 )
                 session.add(row)
@@ -60,8 +67,13 @@ class CatalogRepository:
                 row.title = (
                     provider_title or _optional(payload.get("preview")) or "Untitled conversation"
                 )
+            if provider_title and (is_new or provider_title != old_provider_title):
+                row.alias = provider_title
+                row.alias_updated_by = "provider"
+                row.alias_updated_at = now
             row.preview = str(payload.get("preview") or "")
-            row.transcript_text = str(payload.get("transcript_text") or "")
+            if row.selected:
+                row.transcript_text = str(payload.get("transcript_text") or "")
             row.status = str(payload.get("status") or "idle")
             row.source = _optional(payload.get("source", payload.get("source_kind")))
             row.cwd = _optional(payload.get("cwd"))
@@ -71,6 +83,9 @@ class CatalogRepository:
             row.parent_provider_thread_id = _optional(
                 payload.get("parent_provider_thread_id", payload.get("parent_thread_id"))
             )
+            is_subagent = str(row.source or "").casefold().startswith("subagent")
+            row.conversation_kind = "native_subagent" if is_subagent else "full"
+            row.delivery_mode = "catalog_only" if is_subagent else "direct"
             row.created_at = _datetime(payload.get("created_at"))
             row.last_activity_at = _datetime(
                 payload.get("last_activity_at", payload.get("updated_at"))
@@ -117,12 +132,20 @@ class CatalogRepository:
         archived: bool | None = None,
         pinned: bool | None = None,
         include_hidden: bool = False,
+        selected_only: bool = True,
+        node_id: str | None = None,
+        environment_id: str | None = None,
+        conversation_kind: str | None = None,
+        delivery_mode: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> tuple[list[ConversationRow], int]:
+    ) -> tuple[builtins.list[ConversationRow], int]:
         with self.database.session() as session:
             statement = select(ConversationRow)
             count_statement = select(func.count()).select_from(ConversationRow)
+            if selected_only:
+                statement = statement.where(ConversationRow.selected.is_(True))
+                count_statement = count_statement.where(ConversationRow.selected.is_(True))
             if query:
                 ids = (
                     select(text("conversation_id"))
@@ -141,6 +164,15 @@ class CatalogRepository:
             if status:
                 statement = statement.where(ConversationRow.status == status)
                 count_statement = count_statement.where(ConversationRow.status == status)
+            for column, value in (
+                (ConversationRow.node_id, node_id),
+                (ConversationRow.environment_id, environment_id),
+                (ConversationRow.conversation_kind, conversation_kind),
+                (ConversationRow.delivery_mode, delivery_mode),
+            ):
+                if value:
+                    statement = statement.where(column == value)
+                    count_statement = count_statement.where(column == value)
             if archived is not None:
                 statement = statement.where(ConversationRow.archived == archived)
                 count_statement = count_statement.where(ConversationRow.archived == archived)
@@ -159,6 +191,52 @@ class CatalogRepository:
             )
             return list(session.scalars(statement)), int(session.scalar(count_statement) or 0)
 
+    def candidates(
+        self, *, node_id: str | None = None, environment_id: str | None = None
+    ) -> builtins.list[ConversationRow]:
+        with self.database.session() as session:
+            statement = select(ConversationRow).where(ConversationRow.selected.is_(False))
+            if node_id:
+                statement = statement.where(ConversationRow.node_id == node_id)
+            if environment_id:
+                statement = statement.where(ConversationRow.environment_id == environment_id)
+            return list(
+                session.scalars(statement.order_by(ConversationRow.last_activity_at.desc()))
+            )
+
+    def select(self, conversation_ids: builtins.list[str]) -> builtins.list[ConversationRow]:
+        selected: builtins.list[ConversationRow] = []
+        with self.database.session() as session:
+            next_number = int(
+                session.scalar(select(func.max(ConversationRow.conversation_number))) or 0
+            )
+            for conversation_id in conversation_ids:
+                row = session.get(ConversationRow, conversation_id)
+                if row is None:
+                    raise LookupError(f"conversation not found: {conversation_id}")
+                if not row.selected:
+                    next_number += 1
+                    row.conversation_number = next_number
+                    row.selected = True
+                    self._refresh_fts(session, row)
+                selected.append(row)
+            session.commit()
+            return selected
+
+    def deselect(self, conversation_id: str) -> bool:
+        with self.database.session() as session:
+            row = session.get(ConversationRow, conversation_id)
+            if row is None:
+                return False
+            row.selected = False
+            row.transcript_text = ""
+            session.execute(
+                text("DELETE FROM conversation_fts WHERE conversation_id = :conversation_id"),
+                {"conversation_id": conversation_id},
+            )
+            session.commit()
+            return True
+
     def get(self, conversation_id: str) -> ConversationRow | None:
         with self.database.session() as session:
             return session.get(ConversationRow, conversation_id)
@@ -166,7 +244,7 @@ class CatalogRepository:
     def update_metadata(
         self, conversation_id: str, changes: dict[str, Any]
     ) -> ConversationRow | None:
-        allowed = {"title", "notes", "pinned", "hidden", "archived", "tags"}
+        allowed = {"alias", "notes", "pinned", "hidden", "archived", "tags"}
         unknown = set(changes) - allowed
         if unknown:
             raise ValueError(f"unsupported metadata fields: {', '.join(sorted(unknown))}")
@@ -178,6 +256,10 @@ class CatalogRepository:
                 if key == "tags":
                     normalized = sorted({str(tag).strip() for tag in value if str(tag).strip()})
                     row.tags_json = json.dumps(normalized)
+                elif key == "alias":
+                    row.alias = str(value).strip()
+                    row.alias_updated_by = "human"
+                    row.alias_updated_at = datetime.now(UTC)
                 else:
                     setattr(row, key, value)
             session.flush()
@@ -198,7 +280,7 @@ class CatalogRepository:
             ),
             {
                 "conversation_id": row.conversation_id,
-                "title": row.title,
+                "title": " ".join(filter(None, (row.alias, row.provider_title, row.title))),
                 "preview": row.preview,
                 "transcript_text": row.transcript_text,
                 "notes": row.notes,

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
 from typing import Any, Literal, Protocol
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,13 +17,16 @@ class NodeCommand(BaseModel):
 
     command_id: str = Field(min_length=1)
     claim_token: str = Field(min_length=1)
-    kind: Literal["resume_conversation", "open_path"]
+    kind: Literal["resume_conversation", "open_path", "deliver_turn", "start_conversation"]
     environment_id: str = Field(min_length=1)
     conversation_id: str | None = None
     provider: str = "codex"
     provider_thread_id: str | None = None
     workspace: str | None = None
     path: str | None = None
+    prompt: str | None = None
+    message_id: str | None = None
+    correlation_id: str | None = None
 
 
 class CommandResult(BaseModel):
@@ -67,11 +72,111 @@ class NativeCommandRunner:
             return self._failure(
                 request, f"environment {request.environment_id!r} is not available on this node"
             )
+        if request.kind == "deliver_turn":
+            return self._deliver_turn(request)
+        if request.kind == "start_conversation":
+            return self._start_conversation(request)
         if not self.enabled:
             return self._failure(request, "native actions are disabled on this node")
         if request.kind == "resume_conversation":
             return self._resume(request)
         return self._open(request)
+
+    def _start_conversation(self, request: NodeCommand) -> CommandResult:
+        if request.provider not in {"codex", "claude"}:
+            return self._failure(request, f"provider {request.provider!r} is not supported")
+        if not request.workspace or not request.prompt:
+            return self._failure(request, "agent start is missing a workspace or prompt")
+        workspace = Path(request.workspace)
+        if not workspace.is_dir():
+            return self._failure(request, f"workspace is unavailable: {workspace}")
+        session_id = str(uuid4()) if request.provider == "claude" else None
+        argv = (
+            [self.claude_bin, "--session-id", session_id or "", "--print", request.prompt]
+            if request.provider == "claude"
+            else [self.codex_bin, "exec", "--json", request.prompt]
+        )
+        try:
+            completed = subprocess.run(
+                argv,
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                timeout=24 * 60 * 60,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return self._failure(request, f"provider agent failed to start: {error}")
+        if completed.returncode:
+            detail = (completed.stderr or completed.stdout)[-2_000:]
+            return self._failure(request, detail or "provider agent failed")
+        if request.provider == "codex":
+            session_id = self._codex_thread_id(completed.stdout)
+        return CommandResult(
+            command_id=request.command_id,
+            claim_token=request.claim_token,
+            status="succeeded",
+            detail="Provider conversation completed its initial turn",
+            output={"provider_thread_id": session_id},
+        )
+
+    @staticmethod
+    def _codex_thread_id(output: str) -> str | None:
+        for line in output.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            thread_id = event.get("thread_id") or event.get("threadId")
+            if isinstance(thread_id, str):
+                return thread_id
+        return None
+
+    def _deliver_turn(self, request: NodeCommand) -> CommandResult:
+        if request.provider not in {"codex", "claude"}:
+            return self._failure(request, f"provider {request.provider!r} is not supported")
+        if not request.provider_thread_id or not request.workspace or not request.prompt:
+            return self._failure(request, "turn delivery is missing a thread, workspace, or prompt")
+        workspace = Path(request.workspace)
+        if not workspace.is_dir():
+            return self._failure(request, f"workspace is unavailable: {workspace}")
+        if request.provider == "codex":
+            argv = [
+                self.codex_bin,
+                "exec",
+                "resume",
+                request.provider_thread_id,
+                request.prompt,
+            ]
+        else:
+            session_id = request.provider_thread_id.split(":agent:", 1)[0]
+            argv = [self.claude_bin, "--resume", session_id, "--print", request.prompt]
+        try:
+            completed = subprocess.run(
+                argv,
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                timeout=24 * 60 * 60,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return self._failure(request, f"provider turn failed to start: {error}")
+        if completed.returncode:
+            detail = (completed.stderr or completed.stdout)[-2_000:]
+            return self._failure(request, detail or "provider turn failed")
+        return CommandResult(
+            command_id=request.command_id,
+            claim_token=request.claim_token,
+            status="succeeded",
+            detail="Bridge message delivered as a provider user turn",
+            output={
+                "message_id": request.message_id,
+                "correlation_id": request.correlation_id,
+            },
+        )
 
     def _resume(self, request: NodeCommand) -> CommandResult:
         if request.provider not in {"codex", "claude"}:
@@ -149,4 +254,8 @@ class NativeCommandRunner:
             claim_token=request.claim_token,
             status="failed",
             detail=detail,
+            output={
+                "message_id": request.message_id,
+                "correlation_id": request.correlation_id,
+            },
         )
