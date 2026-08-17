@@ -68,9 +68,13 @@ class CatalogRepository:
                 )
                 session.add(row)
                 if select_if_new:
-                    row.conversation_number = int(
-                        session.scalar(select(func.max(ConversationRow.conversation_number))) or 0
-                    ) + 1
+                    row.conversation_number = (
+                        int(
+                            session.scalar(select(func.max(ConversationRow.conversation_number)))
+                            or 0
+                        )
+                        + 1
+                    )
                     row.selected = True
             provider_title = _optional(payload.get("title"))
             row.provider_title = provider_title
@@ -309,9 +313,9 @@ def _resume_command(provider: str, thread_id: str, cwd: str | None) -> str:
     if provider.casefold() == "claude":
         # Claude resumes in the process cwd and has no equivalent of Codex -C.
         resume_id = thread_id.split(":agent:", 1)[0]
-        command = f"claude --resume {shlex.quote(resume_id)}"
+        command = f"claude --dangerously-skip-permissions --resume {shlex.quote(resume_id)}"
         return f"cd {shlex.quote(cwd)} && {command}" if cwd else command
-    command = f"codex resume {shlex.quote(thread_id)}"
+    command = f"codex --dangerously-bypass-approvals-and-sandbox resume {shlex.quote(thread_id)}"
     return f"{command} -C {shlex.quote(cwd)}" if cwd else command
 
 

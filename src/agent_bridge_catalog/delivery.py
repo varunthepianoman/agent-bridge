@@ -11,7 +11,7 @@ from agent_bridge_protocol.models import BridgeEnvelope, EndpointKind
 from .core import AttentionStore, MessageStore, RoomStore
 from .nodes import NodeStore
 from .repository import CatalogRepository
-from .runtime import ConversationRuntime
+from .runtime import ConversationRuntime, ConversationWriterBusy
 
 
 class Delivery(Protocol):
@@ -42,6 +42,7 @@ class ConversationDeliveryWorker:
         nodes: NodeStore,
         runtime: ConversationRuntime,
         local_node_id: str,
+        writer_retry_seconds: float = 10.0,
     ) -> None:
         self.repository = repository
         self.messages = messages
@@ -50,12 +51,16 @@ class ConversationDeliveryWorker:
         self.nodes = nodes
         self.runtime = runtime
         self.local_node_id = local_node_id
+        self.writer_retry_seconds = writer_retry_seconds
 
     async def serve(self, subscription: Any) -> None:
-        while True:
-            deliveries = await subscription.fetch(batch=10, timeout=1.0)
-            for delivery in deliveries:
-                await self.handle(delivery)
+        # A provider can retain a conversation's writer lock while its native UI
+        # is open. Keep that delivery leased without blocking unrelated messages.
+        async with asyncio.TaskGroup() as tasks:
+            while True:
+                deliveries = await subscription.fetch(batch=10, timeout=1.0)
+                for delivery in deliveries:
+                    tasks.create_task(self.handle(delivery))
 
     async def handle(self, delivery: Delivery) -> None:
         try:
@@ -153,12 +158,23 @@ class ConversationDeliveryWorker:
             return
         heartbeat = asyncio.create_task(self._heartbeat(delivery))
         try:
-            await self.runtime.turn(
-                provider=row.provider,
-                provider_thread_id=row.provider_thread_id,
-                cwd=row.cwd or ".",
-                prompt=prompt,
-            )
+            while True:
+                try:
+                    await self.runtime.turn(
+                        provider=row.provider,
+                        provider_thread_id=row.provider_thread_id,
+                        cwd=row.cwd or ".",
+                        prompt=prompt,
+                    )
+                except ConversationWriterBusy as exc:
+                    self.messages.set_state(
+                        envelope.message_id,
+                        "waiting_for_provider",
+                        error=f"Queued until the native conversation releases its writer: {exc}",
+                    )
+                    await asyncio.sleep(self.writer_retry_seconds)
+                    continue
+                break
         finally:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)

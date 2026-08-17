@@ -4,10 +4,12 @@ from agent_bridge_catalog.launcher import NativeLauncher, _parse_generated_comma
 
 
 def test_claude_generated_resume_is_parsed_without_a_shell() -> None:
-    argv, cwd = _parse_generated_command("cd '/work/robot project' && claude --resume session-1")
+    argv, cwd = _parse_generated_command(
+        "cd '/work/robot project' && claude --dangerously-skip-permissions --resume session-1"
+    )
 
     assert cwd == "/work/robot project"
-    assert argv == ["claude", "--resume", "session-1"]
+    assert argv == ["claude", "--dangerously-skip-permissions", "--resume", "session-1"]
 
 
 def test_unrecognized_shell_operators_are_not_executed() -> None:
@@ -24,7 +26,8 @@ def test_terminator_uses_execute_argv_and_working_directory(
     _realpath: Mock, _which: Mock, popen: Mock
 ) -> None:
     result = NativeLauncher(enabled=True).launch(
-        "cd '/work/robot project' && claude --resume session-1", requested=True
+        "cd '/work/robot project' && claude --dangerously-skip-permissions --resume session-1",
+        requested=True,
     )
 
     assert result.launched
@@ -35,6 +38,7 @@ def test_terminator_uses_execute_argv_and_working_directory(
             "/work/robot project",
             "-x",
             "claude",
+            "--dangerously-skip-permissions",
             "--resume",
             "session-1",
         ],

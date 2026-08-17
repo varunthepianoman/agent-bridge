@@ -49,7 +49,59 @@ async def test_reconciles_and_generates_provider_native_resume_command(tmp_path:
     rows, total = repository.list(provider="claude", selected_only=False)
 
     assert result.discovered == result.imported == total == 2
-    assert rows[0].resume_command == "cd /work/robot && claude --resume session-root"
+    assert rows[0].resume_command == (
+        "cd /work/robot && claude --dangerously-skip-permissions --resume session-root"
+    )
     child = next(row for row in rows if ":agent:" in row.provider_thread_id)
     assert child.parent_conversation_id is not None
-    assert child.resume_command == "cd /work/robot && claude --resume session-root"
+    assert child.resume_command == (
+        "cd /work/robot && claude --dangerously-skip-permissions --resume session-root"
+    )
+
+
+@pytest.mark.asyncio
+async def test_prefers_claude_generated_ai_title_over_first_prompt(tmp_path: Path) -> None:
+    project = tmp_path / "projects" / "-work-robot"
+    project.mkdir(parents=True)
+    (project / "session.jsonl").write_text(
+        "\n".join(
+            (
+                '{"type":"user","sessionId":"session","cwd":"/work/robot",'
+                '"timestamp":"2026-01-01T00:00:00Z","message":{"role":"user",'
+                '"content":"A very long first prompt that should not be used as the title"}}',
+                '{"type":"ai-title","sessionId":"session","aiTitle":"Investigate robot reconnect"}',
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    records = [item async for item in ClaudeCatalogAdapter(tmp_path).discover()]
+
+    assert records[0].title == "Investigate robot reconnect"
+
+
+@pytest.mark.asyncio
+async def test_prefers_native_subagent_description_over_first_prompt(tmp_path: Path) -> None:
+    root = tmp_path / "projects" / "-work-robot" / "session"
+    subagents = root / "subagents"
+    subagents.mkdir(parents=True)
+    (tmp_path / "projects" / "-work-robot" / "session.jsonl").write_text(
+        '{"type":"user","sessionId":"session","cwd":"/work/robot",'
+        '"timestamp":"2026-01-01T00:00:00Z","message":{"role":"user",'
+        '"content":"Root task"}}\n',
+        encoding="utf-8",
+    )
+    child = subagents / "agent-review.jsonl"
+    child.write_text(
+        '{"type":"user","sessionId":"session","agentId":"review",'
+        '"cwd":"/work/robot","timestamp":"2026-01-01T00:01:00Z",'
+        '"message":{"role":"user","content":"A long implementation prompt"}}\n',
+        encoding="utf-8",
+    )
+    child.with_suffix(".meta.json").write_text(
+        '{"description":"Review reconnect implementation"}', encoding="utf-8"
+    )
+
+    records = [item async for item in ClaudeCatalogAdapter(tmp_path).discover()]
+
+    assert records[1].title == "Review reconnect implementation"

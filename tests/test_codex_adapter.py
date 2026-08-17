@@ -55,10 +55,13 @@ class CodexAdapterTest(unittest.TestCase):
             async with make_client() as client:
                 thread = await client.start_thread(cwd="/tmp")
                 self.assertEqual(thread["id"], "thr_new")
+                self.assertTrue(thread["fullAccess"])
                 resumed = await client.resume_thread("thr_new", cwd="/tmp")
                 self.assertEqual(resumed["id"], "thr_new")
+                self.assertTrue(resumed["fullAccess"])
                 turn = await client.start_turn("thr_new", "Check the socket")
                 self.assertEqual(turn["status"], "inProgress")
+                self.assertTrue(turn["fullAccess"])
                 methods = set()
                 for _ in range(3):
                     method, _params = await client.next_notification(timeout=1)

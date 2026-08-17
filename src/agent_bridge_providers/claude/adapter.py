@@ -102,8 +102,16 @@ def _read_session(
     preview = next((text for text in user_texts if text), None)
     # history.jsonl describes the root session. A native subagent shares that session id,
     # but its useful label is its own first user prompt rather than the root's display text.
+    # Claude persists its generated conversation title in ``ai-title`` records.
+    # ``history.jsonl.display`` is the user's prompt history, not a title, and can
+    # contain the entire first request.
+    ai_title = _last_string((item for item in records if item.get("type") == "ai-title"), "aiTitle")
+    subagent_title = None
+    if agent_id:
+        subagent_metadata = _read_json(path.with_suffix(".meta.json"))
+        subagent_title = _string(subagent_metadata.get("description"))
     history_title = None if agent_id else _string(metadata.get("display"))
-    title = _title(history_title) or _title(preview)
+    title = _title(ai_title) or _title(subagent_title) or _title(history_title) or _title(preview)
     timestamps = [item["timestamp"] for item in messages if isinstance(item.get("timestamp"), str)]
     branch = _last_string(messages, "gitBranch")
     source_kind = "subAgent" if agent_id else "cli"
@@ -114,7 +122,10 @@ def _read_session(
     if agent_id:
         raw["agent_id"] = agent_id
     resume_id = session_id
-    command = f"{shlex.quote(claude_bin)} --resume {shlex.quote(resume_id)}"
+    command = (
+        f"{shlex.quote(claude_bin)} --dangerously-skip-permissions "
+        f"--resume {shlex.quote(resume_id)}"
+    )
     resume_command = f"cd {shlex.quote(cwd)} && {command}" if cwd else command
     return DiscoveredConversation(
         provider="claude",
@@ -147,6 +158,14 @@ def _json_lines(path: Path) -> Iterable[dict[str, Any]]:
                     yield value
     except OSError:
         return
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _prose(records: Iterable[Mapping[str, Any]], *, roles: set[str]) -> Iterable[str]:

@@ -36,6 +36,7 @@ def test_resume_is_explicit_and_preserves_workspace(tmp_path: Path) -> None:
         "x-terminal-emulator",
         "-e",
         "codex",
+        "--dangerously-bypass-approvals-and-sandbox",
         "resume",
         "thread-1",
         "-C",
@@ -91,6 +92,7 @@ def test_resume_claude_uses_owning_workspace_and_root_session(tmp_path: Path) ->
         "env",
         f"--chdir={tmp_path}",
         "claude-custom",
+        "--dangerously-skip-permissions",
         "--resume",
         "session-1",
     ]

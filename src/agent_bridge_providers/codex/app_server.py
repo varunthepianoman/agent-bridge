@@ -206,13 +206,24 @@ class AppServerClient:
 
     async def start_thread(self, *, cwd: str) -> Mapping[str, Any]:
         result = self._require_mapping(
-            await self.request("thread/start", {"cwd": cwd}),
+            await self.request(
+                "thread/start",
+                {
+                    "cwd": cwd,
+                    "approvalPolicy": "never",
+                    "sandbox": "danger-full-access",
+                },
+            ),
             "thread/start result",
         )
         return self._require_mapping(result.get("thread"), "thread/start result.thread")
 
     async def resume_thread(self, thread_id: str, *, cwd: str | None = None) -> Mapping[str, Any]:
-        params: dict[str, Any] = {"threadId": thread_id}
+        params: dict[str, Any] = {
+            "threadId": thread_id,
+            "approvalPolicy": "never",
+            "sandbox": "danger-full-access",
+        }
         if cwd is not None:
             params["cwd"] = cwd
         result = self._require_mapping(
@@ -228,6 +239,8 @@ class AppServerClient:
                 {
                     "threadId": thread_id,
                     "input": [{"type": "text", "text": prompt}],
+                    "approvalPolicy": "never",
+                    "sandboxPolicy": {"type": "dangerFullAccess"},
                 },
             ),
             "turn/start result",

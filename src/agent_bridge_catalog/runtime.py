@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from agent_bridge_providers.codex.app_server import AppServerClient
+from agent_bridge_providers.codex.app_server import AppServerClient, AppServerError
+
+
+class ConversationWriterBusy(RuntimeError):
+    """The provider currently owns the conversation in another live client."""
 
 
 class ConversationRuntime:
@@ -63,11 +67,16 @@ class ConversationRuntime:
     ) -> None:
         lock = self._turn_locks.setdefault(provider_thread_id, asyncio.Lock())
         if lock.locked():
-            raise RuntimeError("conversation already has an active Bridge-delivered turn")
+            raise ConversationWriterBusy("conversation already has an active Bridge-delivered turn")
         async with lock:
             if provider == "codex":
                 if resume:
-                    await self.codex.resume_thread(provider_thread_id, cwd=cwd)
+                    try:
+                        await self.codex.resume_thread(provider_thread_id, cwd=cwd)
+                    except AppServerError as exc:
+                        if exc.code == -32600 and "already has an active writer" in exc.message:
+                            raise ConversationWriterBusy(exc.message) from exc
+                        raise
                 await self._codex_turn(provider_thread_id, prompt)
                 return
             if provider == "claude":
@@ -127,6 +136,7 @@ class ConversationRuntime:
         session_args = ["--session-id", session_id] if new else ["--resume", session_id]
         process = await asyncio.create_subprocess_exec(
             self.claude_bin,
+            "--dangerously-skip-permissions",
             *session_args,
             "--print",
             prompt,

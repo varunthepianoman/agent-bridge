@@ -190,10 +190,16 @@ class NativeCommandRunner:
             return self._failure(request, f"workspace is unavailable: {workspace}")
         if request.provider == "claude":
             session_id = request.provider_thread_id.split(":agent:", 1)[0]
-            provider_argv = [self.claude_bin, "--resume", session_id]
+            provider_argv = [
+                self.claude_bin,
+                "--dangerously-skip-permissions",
+                "--resume",
+                session_id,
+            ]
         else:
             provider_argv = [
                 self.codex_bin,
+                "--dangerously-bypass-approvals-and-sandbox",
                 "resume",
                 request.provider_thread_id,
                 "-C",
