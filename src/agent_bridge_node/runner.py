@@ -27,6 +27,8 @@ class NodeCommand(BaseModel):
     prompt: str | None = None
     message_id: str | None = None
     correlation_id: str | None = None
+    model: str | None = None
+    effort: Literal["low", "medium", "high", "xhigh", "max", "ultra"] | None = None
 
 
 class CommandResult(BaseModel):
@@ -85,17 +87,28 @@ class NativeCommandRunner:
     def _start_conversation(self, request: NodeCommand) -> CommandResult:
         if request.provider not in {"codex", "claude"}:
             return self._failure(request, f"provider {request.provider!r} is not supported")
+        if request.provider == "claude" and request.effort == "ultra":
+            return self._failure(request, "Claude does not support ultra reasoning effort")
         if not request.workspace or not request.prompt:
             return self._failure(request, "agent start is missing a workspace or prompt")
         workspace = Path(request.workspace)
         if not workspace.is_dir():
             return self._failure(request, f"workspace is unavailable: {workspace}")
         session_id = str(uuid4()) if request.provider == "claude" else None
-        argv = (
-            [self.claude_bin, "--session-id", session_id or "", "--print", request.prompt]
-            if request.provider == "claude"
-            else [self.codex_bin, "exec", "--json", request.prompt]
-        )
+        if request.provider == "claude":
+            argv = [self.claude_bin, "--session-id", session_id or ""]
+            if request.model:
+                argv.extend(("--model", request.model))
+            if request.effort:
+                argv.extend(("--effort", request.effort))
+            argv.extend(("--print", request.prompt))
+        else:
+            argv = [self.codex_bin, "exec", "--json"]
+            if request.model:
+                argv.extend(("--model", request.model))
+            if request.effort:
+                argv.extend(("--config", f'model_reasoning_effort="{request.effort}"'))
+            argv.append(request.prompt)
         try:
             completed = subprocess.run(
                 argv,
@@ -137,6 +150,8 @@ class NativeCommandRunner:
     def _deliver_turn(self, request: NodeCommand) -> CommandResult:
         if request.provider not in {"codex", "claude"}:
             return self._failure(request, f"provider {request.provider!r} is not supported")
+        if request.provider == "claude" and request.effort == "ultra":
+            return self._failure(request, "Claude does not support ultra reasoning effort")
         if not request.provider_thread_id or not request.workspace or not request.prompt:
             return self._failure(request, "turn delivery is missing a thread, workspace, or prompt")
         workspace = Path(request.workspace)
@@ -147,12 +162,16 @@ class NativeCommandRunner:
                 self.codex_bin,
                 "exec",
                 "resume",
-                request.provider_thread_id,
-                request.prompt,
             ]
+            if request.effort:
+                argv.extend(("--config", f'model_reasoning_effort="{request.effort}"'))
+            argv.extend((request.provider_thread_id, request.prompt))
         else:
             session_id = request.provider_thread_id.split(":agent:", 1)[0]
-            argv = [self.claude_bin, "--resume", session_id, "--print", request.prompt]
+            argv = [self.claude_bin, "--resume", session_id]
+            if request.effort:
+                argv.extend(("--effort", request.effort))
+            argv.extend(("--print", request.prompt))
         try:
             completed = subprocess.run(
                 argv,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response, status
@@ -39,10 +39,13 @@ class ConversationCreate(Input):
     alias: str | None = Field(default=None, min_length=1, max_length=500)
     node_id: str | None = None
     environment_id: str | None = None
+    model: str | None = Field(default=None, min_length=1, max_length=160)
+    effort: Literal["low", "medium", "high", "xhigh", "max", "ultra"] | None = None
 
 
 class TurnCreate(Input):
     prompt: str = Field(min_length=1)
+    effort: Literal["low", "medium", "high", "xhigh", "max", "ultra"] | None = None
 
 
 class CatalogSettingsPatch(Input):
@@ -219,6 +222,8 @@ async def create_conversation(payload: ConversationCreate, request: Request) -> 
                     "environment_id": environment_id,
                     "prompt": payload.initial_prompt,
                     "alias": payload.alias,
+                    "model": payload.model,
+                    "effort": payload.effort,
                 },
             )
         except ValueError as exc:
@@ -231,7 +236,11 @@ async def create_conversation(payload: ConversationCreate, request: Request) -> 
         }
     try:
         thread_id = await request.app.state.runtime.start(
-            provider=payload.provider, cwd=payload.cwd, prompt=payload.initial_prompt
+            provider=payload.provider,
+            cwd=payload.cwd,
+            prompt=payload.initial_prompt,
+            model=payload.model,
+            effort=payload.effort,
         )
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -244,6 +253,10 @@ async def create_conversation(payload: ConversationCreate, request: Request) -> 
             "cwd": payload.cwd,
             "status": "active",
             "source_kind": "agent_bridge",
+            "raw_metadata": {
+                "launch_model": payload.model,
+                "launch_effort": payload.effort,
+            },
         },
         node_id=node_id,
         environment_id=environment_id,
@@ -289,6 +302,28 @@ async def create_turn(
     conversation_id: str, payload: TurnCreate, request: Request
 ) -> dict[str, Any]:
     row = _conversation(request, conversation_id)
+    if row.node_id != request.app.state.settings.node_id:
+        try:
+            command = request.app.state.node_store.queue_command(
+                node_id=row.node_id,
+                kind="deliver_turn",
+                conversation_id=row.conversation_id,
+                payload={
+                    "provider": row.provider,
+                    "provider_thread_id": row.provider_thread_id,
+                    "workspace": row.cwd or ".",
+                    "environment_id": row.environment_id,
+                    "prompt": payload.prompt,
+                    "effort": payload.effort,
+                },
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            "status": "queued_remote",
+            "conversation_id": conversation_id,
+            "command_id": command["command_id"],
+        }
 
     async def run() -> None:
         try:
@@ -297,6 +332,7 @@ async def create_turn(
                 provider_thread_id=row.provider_thread_id,
                 cwd=row.cwd or ".",
                 prompt=payload.prompt,
+                effort=payload.effort,
             )
             _attention(request).create(
                 category="update",

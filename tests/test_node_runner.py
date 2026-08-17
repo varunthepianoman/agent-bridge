@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -150,3 +151,107 @@ def test_native_action_failure_is_reported_without_substitute(tmp_path: Path) ->
     result = runner.execute(command)
     assert result.status == "failed"
     assert result.launched_command is None
+
+
+def test_start_codex_passes_launch_model_and_effort(monkeypatch, tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout='{"thread_id":"thread-new"}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agent_bridge_node.runner.subprocess.run", run)
+    runner = NativeCommandRunner(environment_id="host", enabled=True, codex_bin="codex-custom")
+    result = runner.execute(
+        NodeCommand(
+            command_id="cmd-start-codex",
+            claim_token="claim-start-codex",
+            kind="start_conversation",
+            environment_id="host",
+            provider="codex",
+            workspace=str(tmp_path),
+            prompt="Review the change",
+            model="gpt-5.6-sol",
+            effort="high",
+        )
+    )
+
+    assert result.status == "succeeded"
+    assert result.output["provider_thread_id"] == "thread-new"
+    assert calls == [
+        [
+            "codex-custom",
+            "exec",
+            "--json",
+            "--model",
+            "gpt-5.6-sol",
+            "--config",
+            'model_reasoning_effort="high"',
+            "Review the change",
+        ]
+    ]
+
+
+def test_start_and_resume_claude_pass_only_supported_configuration(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+
+    def run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="done", stderr="")
+
+    monkeypatch.setattr("agent_bridge_node.runner.subprocess.run", run)
+    runner = NativeCommandRunner(environment_id="host", enabled=True, claude_bin="claude-custom")
+    started = runner.execute(
+        NodeCommand(
+            command_id="cmd-start-claude",
+            claim_token="claim-start-claude",
+            kind="start_conversation",
+            environment_id="host",
+            provider="claude",
+            workspace=str(tmp_path),
+            prompt="Review the change",
+            model="opus",
+            effort="high",
+        )
+    )
+    resumed = runner.execute(
+        NodeCommand(
+            command_id="cmd-turn-claude",
+            claim_token="claim-turn-claude",
+            kind="deliver_turn",
+            environment_id="host",
+            provider="claude",
+            provider_thread_id="session-1",
+            workspace=str(tmp_path),
+            prompt="Look more deeply",
+            effort="xhigh",
+        )
+    )
+
+    assert started.status == "succeeded"
+    assert resumed.status == "succeeded"
+    assert calls[0][0:2] == ["claude-custom", "--session-id"]
+    assert calls[0][3:] == [
+        "--model",
+        "opus",
+        "--effort",
+        "high",
+        "--print",
+        "Review the change",
+    ]
+    assert calls[1] == [
+        "claude-custom",
+        "--resume",
+        "session-1",
+        "--effort",
+        "xhigh",
+        "--print",
+        "Look more deeply",
+    ]

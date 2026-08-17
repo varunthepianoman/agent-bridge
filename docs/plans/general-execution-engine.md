@@ -118,7 +118,8 @@ or reconciliation issues, message/correlation identifiers, and JSON export.
 | Open native chat | Open native | `agent-bridge open` | `open_conversation` | already native | local launch or fenced remote command |
 | Send direct message | composer | `agent-bridge message --chat` | `send_message` | type a prompt manually | NATS inbox → provider user turn |
 | Send room message | room composer | `agent-bridge message --room` | `send_message` | — | NATS room → wake/notify/digest members |
-| Start full agent | creation form | `agent-bridge start` | `start_agent` | New chat | local App Server/Claude or remote command |
+| Start full agent | creation form | `agent-bridge start [--model ...] [--effort ...]` | `start_agent` | New chat | local App Server/Claude or remote command; optional launch model and effort |
+| Send explicit turn / change effort | detail composer | `agent-bridge turn [--effort ...]` | `send_turn` | type a prompt / change provider setting | effort override applies to this and later turns; model cannot be changed after launch |
 | View/ack attention | Attention | `attention` / `ack` | `list_attention` / `acknowledge_attention` | provider notification | durable attention rows |
 | Manage rooms | Rooms | `rooms` | `list_rooms` | — | room and membership APIs |
 | Inspect machines | Machines | `nodes` | `list_nodes` | — | heartbeat/environment ownership |

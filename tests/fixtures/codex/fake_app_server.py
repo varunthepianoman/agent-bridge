@@ -126,6 +126,7 @@ for raw_line in sys.stdin:
             "status": {"type": "idle"},
             "fullAccess": params.get("approvalPolicy") == "never"
             and params.get("sandbox") == "danger-full-access",
+            "model": params.get("model"),
         }
         send({"id": request_id, "result": {"thread": thread}})
         send({"method": "thread/started", "params": {"thread": thread}})
@@ -150,6 +151,8 @@ for raw_line in sys.stdin:
             "items": [],
             "fullAccess": params.get("approvalPolicy") == "never"
             and params.get("sandboxPolicy") == {"type": "dangerFullAccess"},
+            "model": params.get("model"),
+            "effort": params.get("effort"),
         }
         send({"id": request_id, "result": {"turn": turn}})
         send(

@@ -33,26 +33,38 @@ class ConversationRuntime:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         await self.codex.close()
 
-    async def start(self, *, provider: str, cwd: str, prompt: str) -> str:
+    async def start(
+        self,
+        *,
+        provider: str,
+        cwd: str,
+        prompt: str,
+        model: str | None = None,
+        effort: str | None = None,
+    ) -> str:
         workspace = Path(cwd)
         if not workspace.is_dir():
             raise ValueError(f"working directory is unavailable: {workspace}")
+        _validate_effort(provider, effort)
         if provider == "codex":
-            thread = await self.codex.start_thread(cwd=str(workspace))
+            thread = await self.codex.start_thread(cwd=str(workspace), model=model)
             thread_id = str(thread["id"])
             self._background(
-                self.turn(
-                    provider="codex",
-                    provider_thread_id=thread_id,
-                    cwd=str(workspace),
-                    prompt=prompt,
-                    resume=False,
-                )
+                self._codex_turn(thread_id, prompt, model=model, effort=effort)
             )
             return thread_id
         if provider == "claude":
             session_id = str(uuid4())
-            self._background(self._claude_turn(session_id, str(workspace), prompt, new=True))
+            self._background(
+                self._claude_turn(
+                    session_id,
+                    str(workspace),
+                    prompt,
+                    new=True,
+                    model=model,
+                    effort=effort,
+                )
+            )
             return session_id
         raise ValueError("provider must be codex or claude")
 
@@ -64,7 +76,9 @@ class ConversationRuntime:
         cwd: str,
         prompt: str,
         resume: bool = True,
+        effort: str | None = None,
     ) -> None:
+        _validate_effort(provider, effort)
         lock = self._turn_locks.setdefault(provider_thread_id, asyncio.Lock())
         if lock.locked():
             raise ConversationWriterBusy("conversation already has an active Bridge-delivered turn")
@@ -77,15 +91,27 @@ class ConversationRuntime:
                         if exc.code == -32600 and "already has an active writer" in exc.message:
                             raise ConversationWriterBusy(exc.message) from exc
                         raise
-                await self._codex_turn(provider_thread_id, prompt)
+                await self._codex_turn(provider_thread_id, prompt, effort=effort)
                 return
             if provider == "claude":
-                await self._claude_turn(provider_thread_id.split(":agent:", 1)[0], cwd, prompt)
+                await self._claude_turn(
+                    provider_thread_id.split(":agent:", 1)[0],
+                    cwd,
+                    prompt,
+                    effort=effort,
+                )
                 return
             raise ValueError("provider must be codex or claude")
 
-    async def _codex_turn(self, thread_id: str, prompt: str) -> None:
-        turn = await self.codex.start_turn(thread_id, prompt)
+    async def _codex_turn(
+        self,
+        thread_id: str,
+        prompt: str,
+        *,
+        model: str | None = None,
+        effort: str | None = None,
+    ) -> None:
+        turn = await self.codex.start_turn(thread_id, prompt, model=model, effort=effort)
         turn_id = str(turn.get("id") or "")
         if not turn_id:
             raise RuntimeError("Codex App Server returned a turn without an id")
@@ -131,13 +157,26 @@ class ConversationRuntime:
         raise RuntimeError(f"Codex turn {status or 'failed'}: {detail}")
 
     async def _claude_turn(
-        self, session_id: str, cwd: str, prompt: str, *, new: bool = False
+        self,
+        session_id: str,
+        cwd: str,
+        prompt: str,
+        *,
+        new: bool = False,
+        model: str | None = None,
+        effort: str | None = None,
     ) -> None:
         session_args = ["--session-id", session_id] if new else ["--resume", session_id]
+        configuration_args: list[str] = []
+        if model is not None:
+            configuration_args.extend(("--model", model))
+        if effort is not None:
+            configuration_args.extend(("--effort", effort))
         process = await asyncio.create_subprocess_exec(
             self.claude_bin,
             "--dangerously-skip-permissions",
             *session_args,
+            *configuration_args,
             "--print",
             prompt,
             cwd=cwd,
@@ -153,3 +192,8 @@ class ConversationRuntime:
         task = asyncio.create_task(coroutine)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+
+def _validate_effort(provider: str, effort: str | None) -> None:
+    if provider == "claude" and effort == "ultra":
+        raise ValueError("Claude does not support ultra reasoning effort")

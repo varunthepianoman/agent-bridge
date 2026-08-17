@@ -64,10 +64,17 @@ agent-bridge candidates
 agent-bridge add <conversation-id>
 agent-bridge chats --query socket
 agent-bridge message --chat <conversation-id> "Check the server side"
-agent-bridge start --provider codex --cwd /work/project "Investigate the failing test"
+agent-bridge start --provider codex --cwd /work/project \
+  --model gpt-5.6-sol --effort high "Investigate the failing test"
+agent-bridge turn <conversation-id> --effort xhigh "Re-check the edge cases"
 agent-bridge attention
 agent-bridge nats
 ```
+
+`start` accepts optional provider model and reasoning-effort overrides. Without them, the provider's
+configured defaults apply. An existing conversation's effort can be changed only through an
+explicit `turn --effort`; ordinary Bridge messages never change it. Bridge intentionally does not
+support changing a conversation's model after launch.
 
 ## Configuration
 

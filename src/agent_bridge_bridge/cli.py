@@ -11,6 +11,8 @@ from typing import Any, TextIO
 import httpx
 import uvicorn
 
+REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent-bridge")
@@ -58,6 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     turn = commands.add_parser("turn", help="send a local user turn to a selected chat")
     turn.add_argument("conversation_id")
     turn.add_argument("prompt")
+    turn.add_argument("--effort", choices=REASONING_EFFORTS)
 
     start = commands.add_parser("start", help="start a new provider conversation")
     start.add_argument("--provider", choices=("codex", "claude"), required=True)
@@ -66,6 +69,8 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--alias")
     start.add_argument("--node")
     start.add_argument("--environment")
+    start.add_argument("--model")
+    start.add_argument("--effort", choices=REASONING_EFFORTS)
 
     open_chat = commands.add_parser("open", help="open a chat in its native provider")
     open_chat.add_argument("conversation_id")
@@ -147,7 +152,8 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
         )
     if command == "turn":
         return client.post(
-            f"/conversations/{args.conversation_id}/turns", json={"prompt": args.prompt}
+            f"/conversations/{args.conversation_id}/turns",
+            json=_without_none({"prompt": args.prompt, "effort": args.effort}),
         )
     if command == "start":
         return client.post(
@@ -160,6 +166,8 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
                     "alias": args.alias,
                     "node_id": args.node,
                     "environment_id": args.environment,
+                    "model": args.model,
+                    "effort": args.effort,
                 }
             ),
         )

@@ -53,15 +53,23 @@ class CodexAdapterTest(unittest.TestCase):
     def test_starts_resumes_and_completes_turns(self) -> None:
         async def scenario() -> None:
             async with make_client() as client:
-                thread = await client.start_thread(cwd="/tmp")
+                thread = await client.start_thread(cwd="/tmp", model="gpt-5.6-sol")
                 self.assertEqual(thread["id"], "thr_new")
                 self.assertTrue(thread["fullAccess"])
+                self.assertEqual(thread["model"], "gpt-5.6-sol")
                 resumed = await client.resume_thread("thr_new", cwd="/tmp")
                 self.assertEqual(resumed["id"], "thr_new")
                 self.assertTrue(resumed["fullAccess"])
-                turn = await client.start_turn("thr_new", "Check the socket")
+                turn = await client.start_turn(
+                    "thr_new",
+                    "Check the socket",
+                    model="gpt-5.6-sol",
+                    effort="high",
+                )
                 self.assertEqual(turn["status"], "inProgress")
                 self.assertTrue(turn["fullAccess"])
+                self.assertEqual(turn["model"], "gpt-5.6-sol")
+                self.assertEqual(turn["effort"], "high")
                 methods = set()
                 for _ in range(3):
                     method, _params = await client.next_notification(timeout=1)

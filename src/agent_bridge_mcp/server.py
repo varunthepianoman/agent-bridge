@@ -64,6 +64,8 @@ def start_agent(
     alias: str | None = None,
     node_id: str | None = None,
     environment_id: str | None = None,
+    model: str | None = None,
+    effort: str | None = None,
 ) -> Any:
     """Start a full Codex or Claude conversation in a trusted Bridge environment."""
     return _request(
@@ -76,7 +78,19 @@ def start_agent(
             "alias": alias,
             "node_id": node_id,
             "environment_id": environment_id,
+            "model": model,
+            "effort": effort,
         },
+    )
+
+
+@mcp.tool()
+def send_turn(conversation_id: str, prompt: str, effort: str | None = None) -> Any:
+    """Send an explicit user turn, optionally changing reasoning effort for later turns."""
+    return _request(
+        "POST",
+        f"/conversations/{conversation_id}/turns",
+        json={"prompt": prompt, "effort": effort},
     )
 
 

@@ -204,16 +204,16 @@ class AppServerClient:
         )
         return self._require_mapping(result.get("thread"), "thread/read result.thread")
 
-    async def start_thread(self, *, cwd: str) -> Mapping[str, Any]:
+    async def start_thread(self, *, cwd: str, model: str | None = None) -> Mapping[str, Any]:
+        params: dict[str, Any] = {
+            "cwd": cwd,
+            "approvalPolicy": "never",
+            "sandbox": "danger-full-access",
+        }
+        if model is not None:
+            params["model"] = model
         result = self._require_mapping(
-            await self.request(
-                "thread/start",
-                {
-                    "cwd": cwd,
-                    "approvalPolicy": "never",
-                    "sandbox": "danger-full-access",
-                },
-            ),
+            await self.request("thread/start", params),
             "thread/start result",
         )
         return self._require_mapping(result.get("thread"), "thread/start result.thread")
@@ -232,17 +232,26 @@ class AppServerClient:
         )
         return self._require_mapping(result.get("thread"), "thread/resume result.thread")
 
-    async def start_turn(self, thread_id: str, prompt: str) -> Mapping[str, Any]:
+    async def start_turn(
+        self,
+        thread_id: str,
+        prompt: str,
+        *,
+        model: str | None = None,
+        effort: str | None = None,
+    ) -> Mapping[str, Any]:
+        params: dict[str, Any] = {
+            "threadId": thread_id,
+            "input": [{"type": "text", "text": prompt}],
+            "approvalPolicy": "never",
+            "sandboxPolicy": {"type": "dangerFullAccess"},
+        }
+        if model is not None:
+            params["model"] = model
+        if effort is not None:
+            params["effort"] = effort
         result = self._require_mapping(
-            await self.request(
-                "turn/start",
-                {
-                    "threadId": thread_id,
-                    "input": [{"type": "text", "text": prompt}],
-                    "approvalPolicy": "never",
-                    "sandboxPolicy": {"type": "dangerFullAccess"},
-                },
-            ),
+            await self.request("turn/start", params),
             "turn/start result",
         )
         turn = result.get("turn")

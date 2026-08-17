@@ -167,6 +167,10 @@ def command_result(
                         "cwd": result.get("workspace"),
                         "status": "idle",
                         "source_kind": "agent_bridge",
+                        "raw_metadata": {
+                            "launch_model": result.get("model"),
+                            "launch_effort": result.get("effort"),
+                        },
                     },
                     node_id=payload.node_id,
                     environment_id=result.get("environment_id", "host"),
@@ -178,6 +182,13 @@ def command_result(
                     title=f"Chat {row.conversation_number} was started remotely",
                     conversation_id=row.conversation_id,
                 )
+        elif result.get("kind") == "deliver_turn" and not isinstance(message_id, str):
+            request.app.state.attention.create(
+                category="update",
+                kind="turn_completed",
+                title="Remote conversation finished a turn",
+                conversation_id=result.get("conversation_id"),
+            )
         return result
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
