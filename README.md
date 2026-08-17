@@ -39,7 +39,15 @@ npm run dev
 ```
 
 Open `http://127.0.0.1:5173`, choose **Add chats**, and select current candidates. Discovery runs
-every 10 seconds, but future chats are not selected automatically.
+every 10 seconds. Enable **Auto-add new chats** in the Conversations header to catalog every chat
+first discovered afterward, including provider-native subagents. Existing candidates remain
+unselected until you add them explicitly.
+
+With `AGENT_BRIDGE_NATIVE_LAUNCH=1`, each local conversation offers two independent actions:
+**Open in Codex/Claude** hands a provider deep link to the desktop operating system, while
+**Open in Terminal** resumes the exact local session with the provider CLI. Claude Desktop's public
+deep-link format opens a new Claude Code session in the same workspace; use Terminal when you need
+to resume the exact local Claude Code session.
 
 ## Interfaces
 

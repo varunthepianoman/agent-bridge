@@ -5,6 +5,7 @@ import inspect
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -25,6 +26,7 @@ from .launcher import NativeLauncher
 from .maintenance import MaintenanceService
 from .node_api import mount_node_api
 from .nodes import NodeStore
+from .preferences import PreferenceStore
 from .repository import CatalogRepository
 from .runtime import ConversationRuntime
 from .supervision import BackgroundSupervisor
@@ -70,8 +72,9 @@ def create_app(
     resolved.state_dir.mkdir(parents=True, exist_ok=True)
     db = database or Database(resolved.database_url)
     repository = CatalogRepository(db)
+    preferences = PreferenceStore(db)
     maintenance = MaintenanceService(db)
-    nodes = NodeStore(db, repository)
+    nodes = NodeStore(db, repository, preferences.auto_add_new_chats)
     broker_projection = BrokerProjectionStore(db)
     attention = AttentionStore(db)
     collections = CollectionStore(db)
@@ -137,6 +140,7 @@ def create_app(
             selected_provider,
             node_id=resolved.node_id,
             environment_id=resolved.environment_id,
+            auto_add_new_chats=preferences.auto_add_new_chats,
         )
         try:
             if managed_transport is not None:
@@ -245,11 +249,21 @@ def create_app(
             "can_receive_turn": row.delivery_mode == "direct",
             "can_message": row.delivery_mode in {"direct", "via_parent"},
         }
+        native_url = None
+        if row.node_id == resolved.node_id:
+            if row.provider.casefold() == "codex":
+                native_url = f"codex://threads/{quote(row.provider_thread_id, safe='')}"
+            elif row.provider.casefold() == "claude":
+                folder = quote(row.cwd or ".", safe="")
+                native_url = f"claude://code/new?folder={folder}"
+        result["native_url"] = native_url
+        result["native_launch_enabled"] = launcher.enabled
         return result
 
     app.state.database = db
     app.state.settings = resolved
     app.state.repository = repository
+    app.state.preferences = preferences
     app.state.maintenance = maintenance
     app.state.node_store = nodes
     app.state.broker_projection = broker_projection

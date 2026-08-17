@@ -5,6 +5,10 @@ export interface ActionResponse {
   detail?: string;
 }
 
+export interface CatalogSettings {
+  auto_add_new_chats: boolean;
+}
+
 export interface CoreConversation {
   id?: string;
   conversation_id: string;
@@ -23,6 +27,8 @@ export interface CoreConversation {
   conversation_kind: "full" | "native_subagent";
   delivery_mode: "direct" | "via_parent" | "catalog_only";
   selected: boolean;
+  native_url?: string;
+  native_launch_enabled: boolean;
   capabilities: {
     can_open: boolean;
     can_receive_turn: boolean;

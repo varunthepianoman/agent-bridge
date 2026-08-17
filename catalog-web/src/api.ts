@@ -4,6 +4,7 @@ import type {
   BridgeMessage,
   BridgeRoom,
   CatalogNode,
+  CatalogSettings,
   CoreConversation,
   NatsEvent,
 } from "./types";
@@ -53,8 +54,21 @@ export function coreConversation(id: string): Promise<CoreConversation> {
   return request(`/conversations/${encodeURIComponent(id)}`);
 }
 
-export function openCoreConversation(id: string): Promise<ActionResponse> {
-  return request(`/conversations/${encodeURIComponent(id)}/open`, { method: "POST" });
+export function openCoreConversation(
+  id: string,
+  target: "desktop" | "terminal",
+): Promise<ActionResponse> {
+  return request(`/conversations/${encodeURIComponent(id)}/open?target=${target}`, {
+    method: "POST",
+  });
+}
+
+export function catalogSettings(): Promise<CatalogSettings> {
+  return request("/settings");
+}
+
+export function updateCatalogSettings(input: CatalogSettings): Promise<CatalogSettings> {
+  return request("/settings", { method: "PATCH", body: JSON.stringify(input) });
 }
 
 export function sendCoreMessage(input: {

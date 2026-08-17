@@ -45,6 +45,10 @@ class TurnCreate(Input):
     prompt: str = Field(min_length=1)
 
 
+class CatalogSettingsPatch(Input):
+    auto_add_new_chats: bool
+
+
 class CollectionCreate(Input):
     name: str = Field(min_length=1, max_length=500)
     description: str = Field(default="", max_length=5_000)
@@ -135,6 +139,17 @@ def health(request: Request, response: Response) -> dict[str, Any]:
         "broker_connected": broker_connected,
         "background": request.app.state.supervisor.snapshot()["status"],
     }
+
+
+@router.get("/settings")
+def get_settings(request: Request) -> dict[str, bool]:
+    return request.app.state.preferences.as_dict()  # type: ignore[no-any-return]
+
+
+@router.patch("/settings")
+def update_settings(payload: CatalogSettingsPatch, request: Request) -> dict[str, bool]:
+    request.app.state.preferences.set_auto_add_new_chats(payload.auto_add_new_chats)
+    return request.app.state.preferences.as_dict()  # type: ignore[no-any-return]
 
 
 @router.get("/conversations")
@@ -307,8 +322,25 @@ async def create_turn(
 
 
 @router.post("/conversations/{conversation_id}/open")
-def open_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
+def open_conversation(
+    conversation_id: str,
+    request: Request,
+    target: str = Query(default="terminal", pattern="^(desktop|terminal)$"),
+) -> dict[str, Any]:
     row = _conversation(request, conversation_id)
+    if target == "desktop":
+        native_url = request.app.state.conversation_dict(row).get("native_url")
+        if not native_url:
+            raise HTTPException(
+                status_code=409, detail="conversation has no local desktop-app locator"
+            )
+        result = request.app.state.launcher.open_url(native_url, requested=True)
+        return {
+            "queued": False,
+            "launched": result.launched,
+            "command": result.command,
+            "detail": result.detail,
+        }
     if not row.resume_command:
         raise HTTPException(status_code=409, detail="conversation has no native resume locator")
     if row.node_id != request.app.state.settings.node_id:

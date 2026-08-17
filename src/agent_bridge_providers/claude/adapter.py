@@ -100,7 +100,10 @@ def _read_session(
     user_texts = list(_prose(messages, roles={"user"}))
     transcript = "\n\n".join(_prose(messages, roles={"user", "assistant"})) if include_turns else ""
     preview = next((text for text in user_texts if text), None)
-    title = _string(metadata.get("display")) or _title(preview)
+    # history.jsonl describes the root session. A native subagent shares that session id,
+    # but its useful label is its own first user prompt rather than the root's display text.
+    history_title = None if agent_id else _string(metadata.get("display"))
+    title = _title(history_title) or _title(preview)
     timestamps = [item["timestamp"] for item in messages if isinstance(item.get("timestamp"), str)]
     branch = _last_string(messages, "gitBranch")
     source_kind = "subAgent" if agent_id else "cli"
@@ -176,8 +179,11 @@ def _string(value: Any) -> str | None:
 def _title(preview: str | None) -> str | None:
     if preview is None:
         return None
-    first_line = preview.splitlines()[0].strip()
-    return first_line[:96] if first_line else None
+    first_line = next((line.strip() for line in preview.splitlines() if line.strip()), "")
+    normalized = " ".join(first_line.split())
+    if not normalized:
+        return None
+    return normalized if len(normalized) <= 96 else f"{normalized[:95].rstrip()}…"
 
 
 def _history_timestamp(metadata: Mapping[str, Any]) -> int | float | None:

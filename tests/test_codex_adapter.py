@@ -138,6 +138,14 @@ class CodexAdapterTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_accepts_app_server_lines_larger_than_asyncio_default(self) -> None:
+        async def scenario() -> None:
+            async with make_client() as client:
+                result = await client.request("test/large")
+                self.assertEqual(len(result["value"]), 128 * 1024)
+
+        asyncio.run(scenario())
+
     def test_restarts_after_process_exit_without_replaying_inflight_request(self) -> None:
         async def scenario() -> None:
             async with make_client() as client:

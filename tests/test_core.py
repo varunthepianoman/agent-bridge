@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 
 from agent_bridge_catalog.app import create_app
 from agent_bridge_catalog.config import Settings
+from agent_bridge_catalog.db import Database
+from agent_bridge_catalog.repository import CatalogRepository
 
 
 class Provider:
@@ -83,6 +85,64 @@ def test_discovery_is_candidate_only_and_selection_assigns_stable_number(tmp_pat
         assert child["display_name"].startswith("Chat ")
 
 
+def test_auto_add_setting_selects_only_future_discoveries_including_subagents(
+    tmp_path: Path,
+) -> None:
+    app = create_app(settings=settings(tmp_path), provider=Provider())
+    with TestClient(app) as client:
+        client.post("/api/v1/reconciliation")
+        assert client.get("/api/v1/conversations").json()["total"] == 0
+
+        updated = client.patch(
+            "/api/v1/settings", json={"auto_add_new_chats": True}
+        ).json()
+        assert updated == {"auto_add_new_chats": True}
+
+        database = app.state.database
+        repository = CatalogRepository(database)
+        new_row = repository.upsert_discovered(
+            {
+                "provider": "claude",
+                "provider_thread_id": "future-child",
+                "parent_thread_id": "future-parent",
+                "title": "Future subagent",
+                "transcript_text": "assistant: checking",
+            },
+            node_id="hub",
+            environment_id="host",
+            select_if_new=app.state.preferences.auto_add_new_chats(),
+        )
+
+        assert new_row.selected
+        assert new_row.conversation_number == 1
+        assert new_row.conversation_kind == "native_subagent"
+        assert client.get("/api/v1/conversations").json()["total"] == 1
+        assert client.get("/api/v1/conversations/candidates").json()["total"] == 2
+
+
+def test_native_urls_are_provider_specific(tmp_path: Path) -> None:
+    app = create_app(settings=settings(tmp_path), provider=Provider())
+    with TestClient(app) as client:
+        repository = app.state.repository
+        codex = repository.upsert_discovered(
+            {"provider": "codex", "provider_thread_id": "codex-id", "cwd": "/work/repo"},
+            node_id="hub",
+            environment_id="host",
+            select_if_new=True,
+        )
+        claude = repository.upsert_discovered(
+            {"provider": "claude", "provider_thread_id": "claude-id", "cwd": "/work/repo"},
+            node_id="hub",
+            environment_id="host",
+            select_if_new=True,
+        )
+
+        codex_payload = client.get(f"/api/v1/conversations/{codex.conversation_id}").json()
+        claude_payload = client.get(f"/api/v1/conversations/{claude.conversation_id}").json()
+        assert codex_payload["native_url"] == "codex://threads/codex-id"
+        assert claude_payload["native_url"] == "claude://code/new?folder=%2Fwork%2Frepo"
+
+
 def test_alias_tracks_real_provider_title_changes_and_human_edits(tmp_path: Path) -> None:
     app = create_app(settings=settings(tmp_path), provider=Provider())
     with TestClient(app) as client:
@@ -95,6 +155,38 @@ def test_alias_tracks_real_provider_title_changes_and_human_edits(tmp_path: Path
         ).json()
         assert changed["alias"] == "Socket work"
         assert changed["alias_updated_by"] == "human"
+
+
+def test_metadata_only_sync_preserves_transcript_and_derives_bounded_alias(tmp_path: Path) -> None:
+    database = Database(f"sqlite:///{tmp_path / 'catalog.db'}")
+    database.initialize()
+    repository = CatalogRepository(database)
+    item = {
+        "provider": "codex",
+        "provider_thread_id": "unnamed",
+        "title": None,
+        "preview": "A descriptive first prompt that should become the catalog alias",
+        "transcript_text": "",
+    }
+    row = repository.upsert_discovered(
+        item,
+        node_id="desktop",
+        environment_id="host",
+        transcript_included=False,
+    )
+    repository.select([row.conversation_id])
+    item["transcript_text"] = "user: hello\nassistant: hi"
+    repository.upsert_discovered(item, node_id="desktop", environment_id="host")
+    item["transcript_text"] = ""
+    row = repository.upsert_discovered(
+        item,
+        node_id="desktop",
+        environment_id="host",
+        transcript_included=False,
+    )
+
+    assert row.alias == "A descriptive first prompt that should become the catalog alias"
+    assert row.transcript_text == "user: hello\nassistant: hi"
 
 
 def test_messages_rooms_attention_and_nats_diagnostics(tmp_path: Path) -> None:

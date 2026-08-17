@@ -30,7 +30,15 @@ class CatalogRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    def upsert_discovered(self, item: Any, *, node_id: str, environment_id: str) -> ConversationRow:
+    def upsert_discovered(
+        self,
+        item: Any,
+        *,
+        node_id: str,
+        environment_id: str,
+        transcript_included: bool = True,
+        select_if_new: bool = False,
+    ) -> ConversationRow:
         if isinstance(item, dict):
             payload = item
         elif is_dataclass(item) and not isinstance(item, type):
@@ -43,7 +51,6 @@ class CatalogRepository:
         now = datetime.now(UTC)
         with self.database.session() as session:
             row = session.get(ConversationRow, conversation_id)
-            is_new = row is None
             if row is None:
                 row = ConversationRow(
                     conversation_id=conversation_id,
@@ -60,19 +67,24 @@ class CatalogRepository:
                     last_synced_at=now,
                 )
                 session.add(row)
-            old_provider_title = row.provider_title
+                if select_if_new:
+                    row.conversation_number = int(
+                        session.scalar(select(func.max(ConversationRow.conversation_number))) or 0
+                    ) + 1
+                    row.selected = True
             provider_title = _optional(payload.get("title"))
             row.provider_title = provider_title
-            if is_new or row.title == old_provider_title or not row.title:
-                row.title = (
-                    provider_title or _optional(payload.get("preview")) or "Untitled conversation"
-                )
-            if provider_title and (is_new or provider_title != old_provider_title):
-                row.alias = provider_title
+            display_title = _short_title(provider_title) or _short_title(
+                _optional(payload.get("preview"))
+            )
+            display_title = display_title or "Untitled conversation"
+            row.title = display_title
+            if row.alias_updated_by == "provider" and row.alias != display_title:
+                row.alias = display_title
                 row.alias_updated_by = "provider"
                 row.alias_updated_at = now
             row.preview = str(payload.get("preview") or "")
-            if row.selected:
+            if row.selected and transcript_included:
                 row.transcript_text = str(payload.get("transcript_text") or "")
             row.status = str(payload.get("status") or "idle")
             row.source = _optional(payload.get("source", payload.get("source_kind")))
@@ -83,7 +95,9 @@ class CatalogRepository:
             row.parent_provider_thread_id = _optional(
                 payload.get("parent_provider_thread_id", payload.get("parent_thread_id"))
             )
-            is_subagent = str(row.source or "").casefold().startswith("subagent")
+            is_subagent = bool(row.parent_provider_thread_id) or str(
+                row.source or ""
+            ).casefold().startswith("subagent")
             row.conversation_kind = "native_subagent" if is_subagent else "full"
             row.delivery_mode = "catalog_only" if is_subagent else "direct"
             row.created_at = _datetime(payload.get("created_at"))
@@ -303,6 +317,16 @@ def _resume_command(provider: str, thread_id: str, cwd: str | None) -> str:
 
 def _optional(value: Any) -> str | None:
     return str(value) if value not in (None, "") else None
+
+
+def _short_title(value: str | None, *, limit: int = 96) -> str | None:
+    if value is None:
+        return None
+    first_line = next((line.strip() for line in value.splitlines() if line.strip()), "")
+    normalized = " ".join(first_line.split())
+    if not normalized:
+        return None
+    return normalized if len(normalized) <= limit else f"{normalized[: limit - 1].rstrip()}…"
 
 
 def _datetime(value: Any) -> datetime | None:

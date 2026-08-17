@@ -259,15 +259,9 @@ class JetStreamTransport:
                         }
                     )
         api_errors = account.api.errors
-        if api_errors:
-            advisories.append(
-                {
-                    "severity": "warning",
-                    "code": "jetstream_api_errors",
-                    "count": api_errors,
-                    "message": "JetStream reports API errors",
-                }
-            )
+        # This counter is cumulative for the life of the server. Expected probes such as
+        # stream_info before first-time provisioning increment it, so it is telemetry rather
+        # than evidence that the broker is currently unhealthy.
         degraded = any(item.get("severity") in {"warning", "error"} for item in advisories)
         return {
             "status": "degraded" if degraded else "healthy",

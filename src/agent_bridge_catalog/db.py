@@ -219,6 +219,14 @@ class LegacyExportRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class CatalogSettingRow(Base):
+    __tablename__ = "catalog_settings"
+
+    key: Mapped[str] = mapped_column(String(160), primary_key=True)
+    value_json: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class WorkItemRow(Base):
     __tablename__ = "work_items"
 
@@ -729,6 +737,7 @@ class Database:
             "attention_items",
             "nats_events",
             "legacy_exports",
+            "catalog_settings",
             "nodes",
             "environments",
             "node_commands",

@@ -29,6 +29,7 @@ async def test_discovers_root_and_native_subagent_without_tool_content() -> None
     assert "SECRET_TOOL_OUTPUT" not in root.transcript_text
     assert child.parent_thread_id == "session-root"
     assert child.source_kind == "subAgent"
+    assert child.title == "Audit the plan"
     assert "SECRET_REASONING" not in child.transcript_text
 
 

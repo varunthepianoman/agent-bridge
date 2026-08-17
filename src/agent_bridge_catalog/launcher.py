@@ -4,7 +4,9 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,12 +38,42 @@ class NativeLauncher:
             return LaunchResult(command, True, "Opened in Windows Terminal")
         terminal = shutil.which("x-terminal-emulator")
         if terminal:
-            launch_argv = [terminal, "-e", *argv]
-            if cwd is not None:
-                launch_argv = [terminal, "-e", "env", f"--chdir={cwd}", *argv]
+            terminal_name = Path(os.path.realpath(terminal)).name
+            if terminal_name == "terminator":
+                launch_argv = [terminal]
+                if cwd is not None:
+                    launch_argv.extend(["--working-directory", cwd])
+                launch_argv.extend(["-x", *argv])
+            else:
+                launch_argv = [terminal, "-e", *argv]
+                if cwd is not None:
+                    launch_argv = [terminal, "-e", "env", f"--chdir={cwd}", *argv]
             subprocess.Popen(launch_argv, start_new_session=True)
             return LaunchResult(command, True, "Opened in the system terminal")
         return LaunchResult(command, False, "No supported terminal launcher was found")
+
+    def open_url(self, url: str, *, requested: bool) -> LaunchResult:
+        if not requested:
+            return LaunchResult(url, False, "Desktop link prepared; launch was not requested")
+        if not self.enabled:
+            return LaunchResult(
+                url,
+                False,
+                "Native launch is disabled; set AGENT_BRIDGE_NATIVE_LAUNCH=1",
+            )
+        if os.name == "nt":
+            os.startfile(url)  # type: ignore[attr-defined]
+            return LaunchResult(url, True, "Opened in the desktop app")
+        opener = shutil.which("open" if sys.platform == "darwin" else "xdg-open")
+        if opener is None:
+            return LaunchResult(url, False, "No supported desktop URL opener was found")
+        subprocess.Popen(
+            [opener, url],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return LaunchResult(url, True, "Opened in the desktop app")
 
 
 def _parse_generated_command(command: str) -> tuple[list[str], str | None]:

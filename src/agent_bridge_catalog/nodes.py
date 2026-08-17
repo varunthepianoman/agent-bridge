@@ -5,6 +5,7 @@ import hmac
 import json
 import posixpath
 import secrets
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePath
 from typing import Any
@@ -25,9 +26,15 @@ class NodeAuthenticationError(ValueError):
 
 
 class NodeStore:
-    def __init__(self, database: Database, repository: CatalogRepository) -> None:
+    def __init__(
+        self,
+        database: Database,
+        repository: CatalogRepository,
+        auto_add_new_chats: Callable[[], bool] | None = None,
+    ) -> None:
         self.database = database
         self.repository = repository
+        self.auto_add_new_chats = auto_add_new_chats or (lambda: False)
 
     def provision(
         self,
@@ -227,7 +234,11 @@ class NodeStore:
             if not policy.include_transcript_text:
                 sanitized["transcript_text"] = ""
             self.repository.upsert_discovered(
-                sanitized, node_id=registration.node_id, environment_id=environment_id
+                sanitized,
+                node_id=registration.node_id,
+                environment_id=environment_id,
+                transcript_included=policy.include_transcript_text,
+                select_if_new=self.auto_add_new_chats(),
             )
             imported += 1
         self.repository.resolve_parents()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,7 +17,7 @@ from agent_bridge_bridge.subjects import (
     subject_for,
     validate_subject,
 )
-from agent_bridge_bridge.transport import JetStreamSettings
+from agent_bridge_bridge.transport import JetStreamSettings, JetStreamTransport
 from agent_bridge_protocol.models import (
     BridgeEnvelope,
     DeliveryPolicy,
@@ -101,3 +102,40 @@ def test_nats_user_password_must_be_complete_and_exclusive() -> None:
         JetStreamSettings(username="node-a")
     with pytest.raises(ValueError, match="mutually exclusive"):
         JetStreamSettings(credentials_file=Path("node.creds"), username="node-a", password="secret")
+
+
+async def test_historical_jetstream_api_errors_do_not_degrade_current_health() -> None:
+    class JetStream:
+        async def account_info(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                memory=0,
+                storage=0,
+                streams=3,
+                consumers=0,
+                api=SimpleNamespace(total=8, errors=5),
+            )
+
+        async def stream_info(self, _name: str) -> SimpleNamespace:
+            state = SimpleNamespace(
+                messages=0,
+                bytes=0,
+                first_seq=0,
+                last_seq=0,
+                consumer_count=0,
+                lost=None,
+                num_deleted=0,
+            )
+            return SimpleNamespace(state=state)
+
+        async def consumers_info(self, _name: str) -> list[object]:
+            return []
+
+    transport = JetStreamTransport()
+    transport._connection = SimpleNamespace(is_connected=True)  # type: ignore[assignment]
+    transport._jetstream = JetStream()  # type: ignore[assignment]
+
+    diagnostics = await transport.diagnostics()
+
+    assert diagnostics["status"] == "healthy"
+    assert diagnostics["account"]["api_errors"] == 5
+    assert diagnostics["advisories"] == []

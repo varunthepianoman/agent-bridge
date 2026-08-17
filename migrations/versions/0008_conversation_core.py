@@ -38,8 +38,38 @@ LEGACY_TABLES = (
     "work_items",
 )
 
+# Database.initialize() in early single-user-core builds could create these tables before
+# Alembic advanced past 0007. They carried no supported data at that revision, so 0008 can
+# safely remove empty instances and recreate them with migration-owned constraints/indexes.
+PRECREATED_CORE_TABLES = (
+    "collection_members",
+    "room_members",
+    "conversation_messages",
+    "attention_items",
+    "nats_events",
+    "legacy_exports",
+    "collections",
+    "rooms",
+)
+
+
+def _remove_empty_precreated_core_tables() -> None:
+    connection = op.get_bind()
+    present = set(sa.inspect(connection).get_table_names())
+    for table in PRECREATED_CORE_TABLES:
+        if table not in present:
+            continue
+        count = connection.execute(sa.text(f'SELECT COUNT(*) FROM "{table}"')).scalar_one()
+        if count:
+            raise RuntimeError(
+                f"cannot migrate hybrid 0007 database: precreated core table {table} "
+                f"contains {count} row(s)"
+            )
+        op.drop_table(table)
+
 
 def upgrade() -> None:
+    _remove_empty_precreated_core_tables()
     with op.batch_alter_table("conversations") as batch:
         batch.add_column(sa.Column("conversation_number", sa.Integer(), nullable=True))
         batch.add_column(
