@@ -95,6 +95,8 @@ support changing a conversation's model after launch.
 
 Remote nodes additionally use `AGENT_BRIDGE_HUB_URL`, `AGENT_BRIDGE_NODE_TOKEN`, and
 `AGENT_BRIDGE_NODE_INTERVAL` (default 10 seconds). The Hub URL must be HTTPS except on loopback.
+See the [Windows NUC node runbook](docs/windows-nuc-node-setup.md) for the first cross-machine
+native-Windows setup.
 
 ## Migration
 

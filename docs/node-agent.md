@@ -24,3 +24,6 @@ behavior; explicit native UI launch additionally requires `AGENT_BRIDGE_NATIVE_L
 
 Use `agent-bridge-node --once` from a Codex or Claude lifecycle hook to accelerate reconciliation.
 The periodic loop remains the repair mechanism if hooks are missing or fail.
+
+For a native Windows machine joining an existing private Hub through Tailscale, follow
+[`windows-nuc-node-setup.md`](windows-nuc-node-setup.md).
