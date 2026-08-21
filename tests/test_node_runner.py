@@ -197,6 +197,47 @@ def test_start_codex_passes_launch_model_and_effort(monkeypatch, tmp_path: Path)
     ]
 
 
+def test_deliver_codex_turn_allows_non_git_workspace(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[list[str], Path]] = []
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((argv, Path(str(kwargs["cwd"]))))
+        return subprocess.CompletedProcess(argv, 0, stdout="done", stderr="")
+
+    monkeypatch.setattr("agent_bridge_node.runner.subprocess.run", run)
+    runner = NativeCommandRunner(environment_id="windows-native", enabled=True)
+    result = runner.execute(
+        NodeCommand(
+            command_id="cmd-turn-codex",
+            claim_token="claim-turn-codex",
+            kind="deliver_turn",
+            environment_id="windows-native",
+            provider="codex",
+            provider_thread_id="thread-existing",
+            workspace=str(tmp_path),
+            prompt="Process this Bridge message",
+            effort="medium",
+        )
+    )
+
+    assert result.status == "succeeded"
+    assert calls == [
+        (
+            [
+                "codex",
+                "exec",
+                "resume",
+                "--skip-git-repo-check",
+                "--config",
+                'model_reasoning_effort="medium"',
+                "thread-existing",
+                "Process this Bridge message",
+            ],
+            tmp_path,
+        )
+    ]
+
+
 def test_start_and_resume_claude_pass_only_supported_configuration(
     monkeypatch, tmp_path: Path
 ) -> None:

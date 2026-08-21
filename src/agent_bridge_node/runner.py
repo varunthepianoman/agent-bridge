@@ -162,6 +162,7 @@ class NativeCommandRunner:
                 self.codex_bin,
                 "exec",
                 "resume",
+                "--skip-git-repo-check",
             ]
             if request.effort:
                 argv.extend(("--config", f'model_reasoning_effort="{request.effort}"'))
