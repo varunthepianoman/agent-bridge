@@ -27,6 +27,8 @@ The periodic loop remains the repair mechanism if hooks are missing or fail.
 
 For a native Windows machine joining an existing private Hub through Tailscale, follow
 [`windows-nuc-node-setup.md`](windows-nuc-node-setup.md).
+For the Ubuntu ABB robot controller machine, follow
+[`abb-t-box-linux-node-setup.md`](abb-t-box-linux-node-setup.md).
 
 Remote-command lease recovery, node-side result journaling, and resilient long-turn supervision are
 specified as a follow-on in
