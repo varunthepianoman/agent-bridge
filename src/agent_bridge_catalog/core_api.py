@@ -91,6 +91,9 @@ class MessageCreate(Input):
     )
     correlation_id: str | None = None
     causation_id: str | None = None
+    delivery_strategy: str = Field(
+        default="queue", pattern="^(queue|steer-or-queue)$"
+    )
 
 
 def _repository(request: Request) -> CatalogRepository:

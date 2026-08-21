@@ -15,5 +15,6 @@ def test_minimal_envelope_is_strict_and_conversation_addressed() -> None:
         body={"text": "hello"},
     )
     assert envelope.schema_version == "agent-bridge/v1"
+    assert envelope.delivery.strategy == "queue"
     with pytest.raises(ValidationError):
         BridgeEnvelope.model_validate({**envelope.model_dump(), "work_id": "removed"})

@@ -137,6 +137,21 @@ def test_cli_passes_launch_settings_and_only_effort_on_later_turns() -> None:
     )
     assert (
         run(
+            [
+                "message",
+                "--chat",
+                "conversation-1",
+                "--delivery",
+                "steer-or-queue",
+                "Bridge update",
+            ],
+            transport=transport,
+            stdout=output,
+        )
+        == 0
+    )
+    assert (
+        run(
             ["turn", "conversation-1", "Go deeper", "--effort", "xhigh"],
             transport=transport,
             stdout=output,
@@ -151,7 +166,13 @@ def test_cli_passes_launch_settings_and_only_effort_on_later_turns() -> None:
         "model": "gpt-5.6-sol",
         "effort": "high",
     }
-    assert json.loads(requests[1].content) == {"prompt": "Go deeper", "effort": "xhigh"}
+    assert json.loads(requests[1].content) == {
+        "body": "Bridge update",
+        "target_conversation_id": "conversation-1",
+        "operation": "message",
+        "delivery_strategy": "steer-or-queue",
+    }
+    assert json.loads(requests[2].content) == {"prompt": "Go deeper", "effort": "xhigh"}
 
 
 def test_turn_schema_rejects_model_changes() -> None:

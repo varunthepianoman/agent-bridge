@@ -10,7 +10,14 @@ from uuid import uuid4
 from sqlalchemy import func, select
 
 from agent_bridge_bridge.subjects import subject_for
-from agent_bridge_protocol.models import BridgeEnvelope, EndpointKind, EndpointRef, MessageKind
+from agent_bridge_protocol.models import (
+    BridgeEnvelope,
+    DeliveryPolicy,
+    DeliveryStrategy,
+    EndpointKind,
+    EndpointRef,
+    MessageKind,
+)
 
 from .db import (
     AttentionRow,
@@ -317,11 +324,14 @@ class MessageStore:
         operation: str,
         correlation_id: str | None,
         causation_id: str | None,
+        delivery_strategy: DeliveryStrategy = "queue",
     ) -> dict[str, Any]:
         if bool(target_conversation_id) == bool(room_id):
             raise ValueError("provide exactly one conversation or room target")
         if operation not in {"message", "request", "reply", "forward", "complete", "needs_user"}:
             raise ValueError("unsupported message operation")
+        if delivery_strategy not in {"queue", "steer-or-queue"}:
+            raise ValueError("unsupported delivery strategy")
         now = datetime.now(UTC)
         message_id = f"message-{uuid4().hex}"
         correlation = correlation_id or f"correlation-{uuid4().hex}"
@@ -339,6 +349,7 @@ class MessageStore:
             body={"text": body, "operation": operation, "actor_kind": actor_kind},
             correlation_id=correlation,
             causation_id=causation_id,
+            delivery=DeliveryPolicy(strategy=delivery_strategy),
         )
         row = ConversationMessageRow(
             message_id=message_id,
@@ -350,6 +361,7 @@ class MessageStore:
             actor_kind=actor_kind,
             operation=operation,
             body=body,
+            delivery_strategy=delivery_strategy,
             state="queued",
             created_at=now,
             updated_at=now,
@@ -433,6 +445,7 @@ class MessageStore:
             actor_kind=str(actor_kind),
             operation=str(operation),
             body=str(body),
+            delivery_strategy=envelope.delivery.strategy,
             state="received",
             subject=subject,
             created_at=envelope.created_at,
@@ -443,13 +456,22 @@ class MessageStore:
             session.commit()
         return self._dict(row)
 
-    def set_state(self, message_id: str, state: str, *, error: str | None = None) -> None:
+    def set_state(
+        self,
+        message_id: str,
+        state: str,
+        *,
+        error: str | None = None,
+        delivery_route: str | None = None,
+    ) -> None:
         with self.database.session() as session:
             row = session.get(ConversationMessageRow, message_id)
             if row is None:
                 return
             row.state = state
             row.error = error
+            if delivery_route is not None:
+                row.delivery_route = delivery_route
             row.updated_at = datetime.now(UTC)
             session.commit()
 
@@ -492,6 +514,8 @@ class MessageStore:
             "actor_kind": row.actor_kind,
             "operation": row.operation,
             "body": row.body,
+            "delivery_strategy": row.delivery_strategy,
+            "delivery_route": row.delivery_route,
             "state": row.state,
             "subject": row.subject,
             "error": row.error,

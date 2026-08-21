@@ -39,6 +39,7 @@ def send_message(
     source_conversation_id: str | None = None,
     operation: str = "message",
     correlation_id: str | None = None,
+    delivery_strategy: str = "queue",
 ) -> Any:
     """Send a durable Bridge message to exactly one selected chat or room."""
     return _request(
@@ -52,6 +53,7 @@ def send_message(
             "actor_kind": "agent",
             "operation": operation,
             "correlation_id": correlation_id,
+            "delivery_strategy": delivery_strategy,
         },
     )
 

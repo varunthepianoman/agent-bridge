@@ -148,6 +148,8 @@ class ConversationMessageRow(Base):
     actor_kind: Mapped[str] = mapped_column(String(40), default="human", index=True)
     operation: Mapped[str] = mapped_column(String(40), default="message", index=True)
     body: Mapped[str] = mapped_column(Text)
+    delivery_strategy: Mapped[str] = mapped_column(String(40), default="queue", index=True)
+    delivery_route: Mapped[str | None] = mapped_column(String(40), index=True)
     state: Mapped[str] = mapped_column(String(40), default="queued", index=True)
     subject: Mapped[str | None] = mapped_column(String(320), index=True)
     error: Mapped[str | None] = mapped_column(Text)

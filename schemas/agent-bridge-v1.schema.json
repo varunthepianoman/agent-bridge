@@ -114,6 +114,15 @@
           "minimum": 0,
           "title": "Retry Backoff Seconds",
           "type": "number"
+        },
+        "strategy": {
+          "default": "queue",
+          "enum": [
+            "queue",
+            "steer-or-queue"
+          ],
+          "title": "Strategy",
+          "type": "string"
         }
       },
       "title": "DeliveryPolicy",

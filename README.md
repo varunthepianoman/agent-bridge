@@ -64,6 +64,8 @@ agent-bridge candidates
 agent-bridge add <conversation-id>
 agent-bridge chats --query socket
 agent-bridge message --chat <conversation-id> "Check the server side"
+agent-bridge message --chat <conversation-id> --delivery steer-or-queue \
+  "Consider this during the active turn"
 agent-bridge start --provider codex --cwd /work/project \
   --model gpt-5.6-sol --effort high "Investigate the failing test"
 agent-bridge turn <conversation-id> --effort xhigh "Re-check the edge cases"
@@ -75,6 +77,20 @@ agent-bridge nats
 configured defaults apply. An existing conversation's effort can be changed only through an
 explicit `turn --effort`; ordinary Bridge messages never change it. Bridge intentionally does not
 support changing a conversation's model after launch.
+
+Direct messages use durable `queue` delivery by default. The opt-in
+`--delivery steer-or-queue` strategy first preserves normal idle-turn delivery, but when a local
+Codex desktop or VS Code task already owns the writer, Bridge attempts to inject the authenticated
+message into that active turn. Definitive steering unavailability falls back to the durable queue.
+An ambiguous post-dispatch result is recorded as `delivery_uncertain` and requires attention rather
+than risking duplicate delivery. Message records expose the requested `delivery_strategy` and the
+actual `delivery_route` (`new_turn`, `steered`, or `queued_fallback`). Claude and remote-node
+steering are intentionally deferred.
+
+Local steering uses Codex's versioned same-user IPC owner/follower protocol. Bridge validates socket
+ownership and permissions, pins the protocol methods it uses, and fails closed to queue delivery on
+incompatibility. This integration contract is described in
+[ADR 0003](docs/adr/0003-local-codex-active-turn-steering.md).
 
 ## Configuration
 

@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 from agent_bridge_protocol.models import BridgeEnvelope, EndpointKind
+from agent_bridge_providers import ActiveTurnDeliveryState
 
 from .core import AttentionStore, MessageStore, RoomStore
 from .nodes import NodeStore
@@ -29,6 +30,10 @@ class Delivery(Protocol):
 
 class Subscription(Protocol):
     async def fetch(self, *, batch: int, timeout: float) -> Sequence[Delivery]: ...
+
+
+class DeliveryOutcomeUncertain(RuntimeError):
+    """A steer may have been accepted, so retrying could duplicate the message."""
 
 
 class ConversationDeliveryWorker:
@@ -69,7 +74,11 @@ class ConversationDeliveryWorker:
             await delivery.dead_letter(reason="invalid_envelope")
             return
         existing = self.messages.get(envelope.message_id)
-        if existing is not None and existing["state"] in {"delivered", "queued_remote"}:
+        if existing is not None and existing["state"] in {
+            "delivered",
+            "delivery_uncertain",
+            "queued_remote",
+        }:
             await delivery.ack()
             return
         destination = envelope.destination
@@ -93,6 +102,9 @@ class ConversationDeliveryWorker:
             else:
                 await delivery.dead_letter(reason="unsupported_destination")
                 return
+        except DeliveryOutcomeUncertain:
+            await delivery.ack()
+            return
         except (LookupError, ValueError) as exc:
             self.messages.set_state(envelope.message_id, "failed", error=str(exc))
             await delivery.dead_letter(reason="invalid_destination")
@@ -154,7 +166,16 @@ class ConversationDeliveryWorker:
                     "correlation_id": envelope.correlation_id,
                 },
             )
-            self.messages.set_state(envelope.message_id, "queued_remote")
+            route = (
+                "queued_fallback"
+                if envelope.delivery.strategy == "steer-or-queue"
+                else "new_turn"
+            )
+            self.messages.set_state(
+                envelope.message_id,
+                "queued_remote",
+                delivery_route=route,
+            )
             return
         heartbeat = asyncio.create_task(self._heartbeat(delivery))
         try:
@@ -167,13 +188,72 @@ class ConversationDeliveryWorker:
                         prompt=prompt,
                     )
                 except ConversationWriterBusy as exc:
-                    self.messages.set_state(
-                        envelope.message_id,
-                        "waiting_for_provider",
-                        error=f"Queued until the native conversation releases its writer: {exc}",
-                    )
+                    if envelope.delivery.strategy == "steer-or-queue":
+                        result = await self.runtime.deliver_active_turn(
+                            provider=row.provider,
+                            provider_thread_id=row.provider_thread_id,
+                            cwd=row.cwd or ".",
+                            prompt=prompt,
+                            message_id=envelope.message_id,
+                        )
+                        if result.state == ActiveTurnDeliveryState.DELIVERED:
+                            self.messages.set_state(
+                                envelope.message_id,
+                                "received",
+                                delivery_route="steered",
+                            )
+                            break
+                        if result.state == ActiveTurnDeliveryState.UNCERTAIN:
+                            confirmed = await self.runtime.wait_for_client_message(
+                                row.provider_thread_id,
+                                envelope.message_id,
+                            )
+                            if confirmed:
+                                self.messages.set_state(
+                                    envelope.message_id,
+                                    "received",
+                                    delivery_route="steered",
+                                )
+                                break
+                            detail = result.detail or "Codex steering outcome is unknown"
+                            self.messages.set_state(
+                                envelope.message_id,
+                                "delivery_uncertain",
+                                error=detail,
+                                delivery_route="steered",
+                            )
+                            self.attention.create(
+                                category="needs_attention",
+                                kind="delivery_uncertain",
+                                title="Bridge message steering outcome is unknown",
+                                detail=detail,
+                                conversation_id=row.conversation_id,
+                                correlation_id=envelope.correlation_id,
+                            )
+                            raise DeliveryOutcomeUncertain(detail) from exc
+                        fallback_detail = result.detail or str(exc)
+                        self.messages.set_state(
+                            envelope.message_id,
+                            "waiting_for_provider",
+                            error=f"Steering unavailable; queued for delivery: {fallback_detail}",
+                            delivery_route="queued_fallback",
+                        )
+                    else:
+                        self.messages.set_state(
+                            envelope.message_id,
+                            "waiting_for_provider",
+                            error=(
+                                "Queued until the native conversation releases its writer: "
+                                f"{exc}"
+                            ),
+                        )
                     await asyncio.sleep(self.writer_retry_seconds)
                     continue
+                self.messages.set_state(
+                    envelope.message_id,
+                    "received",
+                    delivery_route="new_turn",
+                )
                 break
         finally:
             heartbeat.cancel()

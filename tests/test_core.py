@@ -199,11 +199,18 @@ def test_messages_rooms_attention_and_nats_diagnostics(tmp_path: Path) -> None:
         client.post("/api/v1/conversations/import", json={"conversation_ids": [conversation_id]})
         message = client.post(
             "/api/v1/messages",
-            json={"body": "Check the server side too", "target_conversation_id": conversation_id},
+            json={
+                "body": "Check the server side too",
+                "target_conversation_id": conversation_id,
+                "delivery_strategy": "steer-or-queue",
+            },
         )
         assert message.status_code == 201
         assert message.json()["state"] == "published"
+        assert message.json()["delivery_strategy"] == "steer-or-queue"
+        assert message.json()["delivery_route"] is None
         assert publisher.envelopes[0].destination.id == conversation_id
+        assert publisher.envelopes[0].delivery.strategy == "steer-or-queue"
 
         room = client.post("/api/v1/rooms", json={"name": "socket-debug"}).json()
         assert (

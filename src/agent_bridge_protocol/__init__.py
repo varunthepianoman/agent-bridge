@@ -8,6 +8,7 @@ from .models import (
     ArtifactRef,
     BridgeEnvelope,
     DeliveryPolicy,
+    DeliveryStrategy,
     EndpointKind,
     EndpointRef,
     MessageKind,

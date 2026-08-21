@@ -56,6 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
     message.add_argument("--from-chat")
     message.add_argument("--operation", default="message")
     message.add_argument("--correlation-id")
+    message.add_argument(
+        "--delivery",
+        dest="delivery_strategy",
+        choices=("queue", "steer-or-queue"),
+        default="queue",
+    )
 
     turn = commands.add_parser("turn", help="send a local user turn to a selected chat")
     turn.add_argument("conversation_id")
@@ -147,6 +153,7 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
                     "source_conversation_id": args.from_chat,
                     "operation": args.operation,
                     "correlation_id": args.correlation_id,
+                    "delivery_strategy": args.delivery_strategy,
                 }
             ),
         )

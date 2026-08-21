@@ -20,6 +20,7 @@ export type AcknowledgementTimeoutSeconds = number;
 export type ExpiresAt = string | null;
 export type MaxAttempts = number;
 export type RetryBackoffSeconds = number;
+export type Strategy = "queue" | "steer-or-queue";
 export type Id = string;
 export type EndpointKind = "conversation" | "node" | "room" | "endpoint";
 export type MessageKind = "message" | "request" | "event" | "response" | "control";
@@ -58,6 +59,7 @@ export interface DeliveryPolicy {
   expires_at?: ExpiresAt;
   max_attempts?: MaxAttempts;
   retry_backoff_seconds?: RetryBackoffSeconds;
+  strategy?: Strategy;
 }
 export interface EndpointRef {
   id: Id;

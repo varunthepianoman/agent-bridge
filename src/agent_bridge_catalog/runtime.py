@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from agent_bridge_providers import (
+    ActiveTurnDelivery,
+    ActiveTurnDeliveryResult,
+    ActiveTurnDeliveryState,
+    CodexIpcSteering,
+)
 from agent_bridge_providers.codex.app_server import AppServerClient, AppServerError
 
 
@@ -17,10 +23,17 @@ class ConversationWriterBusy(RuntimeError):
 
 
 class ConversationRuntime:
-    def __init__(self, *, codex_bin: str = "codex", claude_bin: str = "claude") -> None:
+    def __init__(
+        self,
+        *,
+        codex_bin: str = "codex",
+        claude_bin: str = "claude",
+        codex_active_turn: ActiveTurnDelivery | None = None,
+    ) -> None:
         self.codex = AppServerClient((codex_bin, "app-server"))
         self.codex.add_notification_handler(self._codex_notification)
         self.claude_bin = claude_bin
+        self.codex_active_turn = codex_active_turn or CodexIpcSteering()
         self._turn_locks: dict[str, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         self._codex_waiters: dict[str, asyncio.Future[Mapping[str, Any]]] = {}
@@ -102,6 +115,46 @@ class ConversationRuntime:
                 )
                 return
             raise ValueError("provider must be codex or claude")
+
+    async def deliver_active_turn(
+        self,
+        *,
+        provider: str,
+        provider_thread_id: str,
+        cwd: str,
+        prompt: str,
+        message_id: str,
+    ) -> ActiveTurnDeliveryResult:
+        if provider != "codex":
+            return ActiveTurnDeliveryResult(
+                ActiveTurnDeliveryState.UNAVAILABLE,
+                f"active-turn delivery is not implemented for {provider}",
+            )
+        return await self.codex_active_turn.deliver(
+            provider_thread_id=provider_thread_id,
+            cwd=cwd,
+            prompt=prompt,
+            message_id=message_id,
+        )
+
+    async def wait_for_client_message(
+        self,
+        provider_thread_id: str,
+        message_id: str,
+        *,
+        attempts: int = 6,
+        interval_seconds: float = 0.5,
+    ) -> bool:
+        for attempt in range(attempts):
+            try:
+                thread = await self.codex.read_thread(provider_thread_id, include_turns=True)
+            except (AppServerError, OSError, TimeoutError):
+                thread = {}
+            if _contains_client_message_id(thread, message_id):
+                return True
+            if attempt + 1 < attempts:
+                await asyncio.sleep(interval_seconds)
+        return False
 
     async def _codex_turn(
         self,
@@ -197,3 +250,13 @@ class ConversationRuntime:
 def _validate_effort(provider: str, effort: str | None) -> None:
     if provider == "claude" and effort == "ultra":
         raise ValueError("Claude does not support ultra reasoning effort")
+
+
+def _contains_client_message_id(value: Any, message_id: str) -> bool:
+    if isinstance(value, Mapping):
+        if value.get("type") == "userMessage" and value.get("clientId") == message_id:
+            return True
+        return any(_contains_client_message_id(item, message_id) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_client_message_id(item, message_id) for item in value)
+    return False

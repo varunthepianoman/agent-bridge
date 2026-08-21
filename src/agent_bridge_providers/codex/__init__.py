@@ -8,6 +8,7 @@ from .app_server import (
     AppServerError,
     AppServerProtocolError,
 )
+from .ipc_steering import CodexIpcSteering
 from .local_sessions import LocalCodexSessionReader
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "AppServerError",
     "AppServerProtocolError",
     "CodexCatalogAdapter",
+    "CodexIpcSteering",
     "DiscoveredConversation",
     "LocalCodexSessionReader",
 ]
