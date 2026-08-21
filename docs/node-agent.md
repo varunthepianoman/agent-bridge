@@ -27,3 +27,7 @@ The periodic loop remains the repair mechanism if hooks are missing or fail.
 
 For a native Windows machine joining an existing private Hub through Tailscale, follow
 [`windows-nuc-node-setup.md`](windows-nuc-node-setup.md).
+
+Remote-command lease recovery, node-side result journaling, and resilient long-turn supervision are
+specified as a follow-on in
+[`plans/remote-command-reliability.md`](plans/remote-command-reliability.md).
