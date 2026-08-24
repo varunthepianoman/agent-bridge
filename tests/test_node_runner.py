@@ -99,6 +99,39 @@ def test_resume_claude_uses_owning_workspace_and_root_session(tmp_path: Path) ->
     ]
 
 
+def test_resume_claude_uses_windows_terminal_on_windows(tmp_path: Path) -> None:
+    launcher = RecordingLauncher()
+    runner = NativeCommandRunner(
+        environment_id="windows-native",
+        enabled=True,
+        platform_name="windows",
+        claude_bin="claude-custom",
+        launcher=launcher,
+    )
+    result = runner.execute(
+        NodeCommand(
+            command_id="cmd-claude-windows",
+            claim_token="claim-claude-windows",
+            kind="resume_conversation",
+            environment_id="windows-native",
+            provider="claude",
+            provider_thread_id="session-1:agent:review",
+            workspace=str(tmp_path),
+        )
+    )
+
+    assert result.status == "succeeded"
+    assert result.launched_command == [
+        "wt.exe",
+        "-d",
+        str(tmp_path),
+        "claude-custom",
+        "--dangerously-skip-permissions",
+        "--resume",
+        "session-1",
+    ]
+
+
 def test_resume_refuses_environment_fallback(tmp_path: Path) -> None:
     launcher = RecordingLauncher()
     runner = NativeCommandRunner(environment_id="host", enabled=True, launcher=launcher)
@@ -137,6 +170,50 @@ def test_open_path_uses_platform_native_argv(tmp_path: Path) -> None:
     )
     assert linux.execute(command).status == "succeeded"
     assert launcher.calls[-1] == ["xdg-open", str(tmp_path)]
+
+
+def test_open_native_codex_url_uses_windows_url_handler() -> None:
+    launcher = RecordingLauncher()
+    command = NodeCommand(
+        command_id="cmd-codex-url",
+        claim_token="claim-codex-url",
+        kind="open_native_url",
+        environment_id="windows-native",
+        native_url="codex://threads/thread-123",
+    )
+    runner = NativeCommandRunner(
+        environment_id="windows-native",
+        enabled=True,
+        platform_name="windows",
+        launcher=launcher,
+    )
+
+    result = runner.execute(command)
+
+    assert result.status == "succeeded"
+    assert result.launched_command == ["explorer.exe", "codex://threads/thread-123"]
+
+
+def test_open_native_codex_url_requires_enabled_windows_node() -> None:
+    command = NodeCommand(
+        command_id="cmd-codex-url",
+        claim_token="claim-codex-url",
+        kind="open_native_url",
+        environment_id="windows-native",
+        native_url="codex://threads/thread-123",
+    )
+
+    disabled = NativeCommandRunner(
+        environment_id="windows-native", enabled=False, platform_name="windows"
+    ).execute(command)
+    non_windows = NativeCommandRunner(
+        environment_id="windows-native", enabled=True, platform_name="linux"
+    ).execute(command)
+
+    assert disabled.status == "failed"
+    assert "disabled" in (disabled.detail or "")
+    assert non_windows.status == "failed"
+    assert "only on Windows" in (non_windows.detail or "")
 
 
 def test_native_action_failure_is_reported_without_substitute(tmp_path: Path) -> None:

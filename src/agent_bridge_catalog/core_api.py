@@ -373,6 +373,20 @@ def open_conversation(
             raise HTTPException(
                 status_code=409, detail="conversation has no local desktop-app locator"
             )
+        if row.provider.casefold() == "codex" and row.node_id != request.app.state.settings.node_id:
+            try:
+                command = request.app.state.node_store.queue_command(
+                    node_id=row.node_id,
+                    kind="open_native_url",
+                    conversation_id=row.conversation_id,
+                    payload={
+                        "native_url": native_url,
+                        "environment_id": row.environment_id,
+                    },
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return {"queued": True, "command_id": command["command_id"]}
         result = request.app.state.launcher.open_url(native_url, requested=True)
         return {
             "queued": False,

@@ -250,12 +250,11 @@ def create_app(
             "can_message": row.delivery_mode in {"direct", "via_parent"},
         }
         native_url = None
-        if row.node_id == resolved.node_id:
-            if row.provider.casefold() == "codex":
-                native_url = f"codex://threads/{quote(row.provider_thread_id, safe='')}"
-            elif row.provider.casefold() == "claude":
-                folder = quote(row.cwd or ".", safe="")
-                native_url = f"claude://code/new?folder={folder}"
+        if row.provider.casefold() == "codex":
+            native_url = f"codex://threads/{quote(row.provider_thread_id, safe='')}"
+        elif row.node_id == resolved.node_id and row.provider.casefold() == "claude":
+            folder = quote(row.cwd or ".", safe="")
+            native_url = f"claude://code/new?folder={folder}"
         result["native_url"] = native_url
         result["native_launch_enabled"] = launcher.enabled
         return result

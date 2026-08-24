@@ -266,6 +266,7 @@ def test_authoritative_resume_routes_to_owner_and_refuses_offline_fallback(
                 "environments": [{"environment_id": "remote-env"}],
                 "conversations": [
                     {
+                        "provider": "codex",
                         "provider_thread_id": "remote-thread",
                         "environment_id": "remote-env",
                         "cwd": "/remote/work",
@@ -295,6 +296,19 @@ def test_authoritative_resume_routes_to_owner_and_refuses_offline_fallback(
         ).json()["command"]
         assert claimed["kind"] == "resume_conversation"
         assert claimed["workspace"] == "/remote/work"
+
+        desktop_opened = client.post(
+            f"/api/v1/conversations/{conversation['conversation_id']}/open?target=desktop",
+        )
+        assert desktop_opened.status_code == 200
+        assert desktop_opened.json()["queued"] is True
+        claimed_desktop = client.post(
+            "/api/v1/node/commands/claim",
+            json={"node_id": "remote-node"},
+            headers=headers,
+        ).json()["command"]
+        assert claimed_desktop["kind"] == "open_native_url"
+        assert claimed_desktop["native_url"] == "codex://threads/remote-thread"
 
         with client.app.state.database.session() as session:
             row = session.get(NodeRow, "remote-node")

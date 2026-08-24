@@ -59,8 +59,9 @@ services:
     networks: [catalog-private]
 
 networks:
-  catalog-private:
-    internal: true
+  # The API and NATS services have no host-published ports; this network remains
+  # private to the stack while allowing the web gateway's published LAN port.
+  catalog-private: {}
 
 volumes:
   catalog-state:

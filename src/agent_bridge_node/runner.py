@@ -7,6 +7,7 @@ import os
 import subprocess
 from pathlib import Path
 from typing import Any, Literal, Protocol
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,13 +18,20 @@ class NodeCommand(BaseModel):
 
     command_id: str = Field(min_length=1)
     claim_token: str = Field(min_length=1)
-    kind: Literal["resume_conversation", "open_path", "deliver_turn", "start_conversation"]
+    kind: Literal[
+        "resume_conversation",
+        "open_path",
+        "open_native_url",
+        "deliver_turn",
+        "start_conversation",
+    ]
     environment_id: str = Field(min_length=1)
     conversation_id: str | None = None
     provider: str = "codex"
     provider_thread_id: str | None = None
     workspace: str | None = None
     path: str | None = None
+    native_url: str | None = None
     prompt: str | None = None
     message_id: str | None = None
     correlation_id: str | None = None
@@ -82,6 +90,8 @@ class NativeCommandRunner:
             return self._failure(request, "native actions are disabled on this node")
         if request.kind == "resume_conversation":
             return self._resume(request)
+        if request.kind == "open_native_url":
+            return self._open_native_url(request)
         return self._open(request)
 
     def _start_conversation(self, request: NodeCommand) -> CommandResult:
@@ -258,6 +268,20 @@ class NativeCommandRunner:
         else:
             return self._failure(request, f"platform {self.platform_name!r} is unsupported")
         return self._launch(request, argv, "Path opened")
+
+    def _open_native_url(self, request: NodeCommand) -> CommandResult:
+        if not request.native_url:
+            return self._failure(request, "native URL command has no URL")
+        parsed = urlparse(request.native_url)
+        if parsed.scheme != "codex":
+            return self._failure(request, "only Codex native URLs are supported")
+        if not self.platform_name.casefold().startswith("win"):
+            return self._failure(request, "native Codex URLs are supported only on Windows")
+        return self._launch(
+            request,
+            ["explorer.exe", request.native_url],
+            "Codex opened in the desktop app",
+        )
 
     def _launch(self, request: NodeCommand, argv: list[str], detail: str) -> CommandResult:
         try:
