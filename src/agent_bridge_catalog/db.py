@@ -406,6 +406,26 @@ class NodeCommandRow(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class NodeTurnEventRow(Base):
+    __tablename__ = "node_turn_events"
+
+    event_id: Mapped[str] = mapped_column(String(500), primary_key=True)
+    node_id: Mapped[str] = mapped_column(
+        ForeignKey("nodes.node_id", ondelete="CASCADE"), index=True
+    )
+    environment_id: Mapped[str] = mapped_column(String(160), index=True)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    provider_thread_id: Mapped[str] = mapped_column(String(500), index=True)
+    provider_turn_id: Mapped[str] = mapped_column(String(500), index=True)
+    command_id: Mapped[str] = mapped_column(
+        ForeignKey("node_commands.command_id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(40), index=True)
+    detail: Mapped[str | None] = mapped_column(Text)
+    payload_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class BrokerMessageRow(Base):
     """Queryable projection of a message whose delivery authority remains JetStream."""
 
@@ -743,6 +763,7 @@ class Database:
             "nodes",
             "environments",
             "node_commands",
+            "node_turn_events",
             "broker_messages",
             "broker_deliveries",
             "broker_dead_letters",

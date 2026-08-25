@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .db import Database, EnvironmentRow, NodeCommandRow, NodeRow
+from .db import Database, EnvironmentRow, NodeCommandRow, NodeRow, NodeTurnEventRow
 from .maintenance import redact_sensitive
 from .repository import CatalogRepository, stable_conversation_id
 from .schemas import EnvironmentRegistration, NodeRegistration
@@ -342,6 +342,51 @@ class NodeStore:
         with self.database.session() as session:
             row = session.get(NodeCommandRow, command_id)
             return self._command_dict(row) if row else None
+
+    def record_turn_event(self, payload: dict[str, Any]) -> dict[str, Any]:
+        event_id = str(payload["event_id"])
+        encoded = _json(payload)
+        now = datetime.now(UTC)
+        with self.database.session() as session:
+            existing = session.get(NodeTurnEventRow, event_id)
+            if existing is not None:
+                if existing.payload_json != encoded:
+                    raise ValueError("turn event already exists with a different payload")
+                return {**payload, "already_recorded": True}
+            command = session.get(NodeCommandRow, str(payload["command_id"]))
+            if command is None or command.node_id != str(payload["node_id"]):
+                raise LookupError("turn event command not found")
+            if command.kind != "start_conversation" or command.status != "succeeded":
+                raise ValueError("turn event command has not created a conversation")
+            command_payload = json.loads(command.payload_json)
+            command_result = json.loads(command.result_json or "{}")
+            output = command_result.get("output", {})
+            if not isinstance(output, dict) or any(
+                (
+                    command_payload.get("environment_id")
+                    != payload["environment_id"],
+                    command_payload.get("provider", "codex") != payload["provider"],
+                    output.get("provider_thread_id") != payload["provider_thread_id"],
+                    output.get("provider_turn_id") != payload["provider_turn_id"],
+                )
+            ):
+                raise ValueError("turn event does not match its start command")
+            row = NodeTurnEventRow(
+                event_id=event_id,
+                node_id=str(payload["node_id"]),
+                environment_id=str(payload["environment_id"]),
+                provider=str(payload["provider"]),
+                provider_thread_id=str(payload["provider_thread_id"]),
+                provider_turn_id=str(payload["provider_turn_id"]),
+                command_id=str(payload["command_id"]),
+                status=str(payload["status"]),
+                detail=payload.get("detail"),
+                payload_json=encoded,
+                created_at=now,
+            )
+            session.add(row)
+            session.commit()
+            return {**payload, "already_recorded": False}
 
     def is_reachable(self, node_id: str) -> bool:
         with self.database.session() as session:

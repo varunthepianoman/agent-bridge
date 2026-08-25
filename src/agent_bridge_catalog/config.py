@@ -23,7 +23,6 @@ class Settings:
     environment_id: str
     codex_bin: str = "codex"
     claude_bin: str = "claude"
-    native_launch_enabled: bool = False
     nats_servers: tuple[str, ...] = ()
     nats_replicas: int = 1
     broker_required: bool = False
@@ -67,7 +66,6 @@ class Settings:
             environment_id=os.environ.get("AGENT_BRIDGE_ENVIRONMENT_ID", "host"),
             codex_bin=os.environ.get("AGENT_BRIDGE_CODEX_BIN", "codex"),
             claude_bin=os.environ.get("AGENT_BRIDGE_CLAUDE_BIN", "claude"),
-            native_launch_enabled=os.environ.get("AGENT_BRIDGE_NATIVE_LAUNCH", "0") == "1",
             nats_servers=servers,
             nats_replicas=int(os.environ.get("AGENT_BRIDGE_NATS_REPLICAS", "1")),
             broker_required=os.environ.get("AGENT_BRIDGE_BROKER_REQUIRED", "0") == "1",

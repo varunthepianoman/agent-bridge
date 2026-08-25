@@ -217,6 +217,93 @@ def test_terminal_result_retries_are_idempotent_but_conflicts_are_rejected(tmp_p
     assert wrong_token.status_code == 401
 
 
+def test_initial_turn_event_requires_catalog_and_is_idempotent(tmp_path: Path) -> None:
+    settings = Settings(
+        state_dir=tmp_path,
+        database_url=f"sqlite:///{tmp_path / 'turn-events.db'}",
+        node_id="hub-local",
+        environment_id="host",
+    )
+    with TestClient(create_app(settings=settings)) as client:
+        credential = "a sufficiently long remote node credential"
+        client.post(
+            "/api/v1/nodes",
+            json={
+                "node_id": "node-remote",
+                "display_name": "Remote",
+                "platform": "windows",
+                "credential": credential,
+            },
+        )
+        headers = {"Authorization": f"Bearer {credential}"}
+        client.post(
+            "/api/v1/node/heartbeat",
+            json={"node_id": "node-remote", "ttl_seconds": 30},
+            headers=headers,
+        )
+        queued = client.app.state.node_store.queue_command(
+            node_id="node-remote",
+            kind="start_conversation",
+            payload={
+                "provider": "codex",
+                "environment_id": "windows-native",
+                "workspace": "C:\\dev\\repo",
+                "prompt": "Inspect only",
+                "alias": "Smoke task",
+            },
+        )
+        command = client.post(
+            "/api/v1/node/commands/claim",
+            json={"node_id": "node-remote"},
+            headers=headers,
+        ).json()["command"]
+        event = {
+            "event_id": "node-remote/thread-1/turn-1/completed",
+            "node_id": "node-remote",
+            "environment_id": "windows-native",
+            "provider": "codex",
+            "provider_thread_id": "thread-1",
+            "provider_turn_id": "turn-1",
+            "command_id": queued["command_id"],
+            "status": "completed",
+            "detail": None,
+        }
+
+        before_result = client.post("/api/v1/node/turn-events", json=event, headers=headers)
+        assert before_result.status_code == 409
+
+        result = client.post(
+            f"/api/v1/node/commands/{queued['command_id']}/result",
+            json={
+                "node_id": "node-remote",
+                "claim_token": command["claim_token"],
+                "status": "succeeded",
+                "detail": "accepted",
+                "output": {
+                    "provider_thread_id": "thread-1",
+                    "provider_turn_id": "turn-1",
+                    "initial_turn_status": "inProgress",
+                },
+            },
+            headers=headers,
+        )
+        assert result.status_code == 200
+
+        first = client.post("/api/v1/node/turn-events", json=event, headers=headers)
+        retried = client.post("/api/v1/node/turn-events", json=event, headers=headers)
+        conflicting = client.post(
+            "/api/v1/node/turn-events",
+            json={**event, "status": "failed", "detail": "late failure"},
+            headers=headers,
+        )
+        assert first.status_code == retried.status_code == 200
+        assert first.json()["already_recorded"] is False
+        assert retried.json()["already_recorded"] is True
+        assert conflicting.status_code == 409
+        attention = client.get("/api/v1/attention").json()["items"]
+        assert [item["kind"] for item in attention].count("turn_completed") == 1
+
+
 def test_environment_identity_is_scoped_to_owning_node(tmp_path: Path) -> None:
     client, _store, repository = _client(tmp_path)
     for node_id in ("node-a", "node-b"):

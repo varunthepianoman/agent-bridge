@@ -70,7 +70,6 @@ class NodeAgentSettings:
     environment_kind: str = field(default_factory=lambda: platform.system().casefold())
     interval_seconds: float = 10.0
     request_timeout_seconds: float = 30.0
-    native_launch_enabled: bool = False
     codex_bin: str = "codex"
     claude_bin: str = "claude"
     exclusions: ExclusionRules = field(default_factory=ExclusionRules)
@@ -101,7 +100,6 @@ class NodeAgentSettings:
             ),
             interval_seconds=float(os.environ.get("AGENT_BRIDGE_NODE_INTERVAL", "10")),
             request_timeout_seconds=float(os.environ.get("AGENT_BRIDGE_HTTP_TIMEOUT", "30")),
-            native_launch_enabled=os.environ.get("AGENT_BRIDGE_NATIVE_LAUNCH", "0") == "1",
             codex_bin=os.environ.get("AGENT_BRIDGE_CODEX_BIN", "codex"),
             claude_bin=os.environ.get("AGENT_BRIDGE_CLAUDE_BIN", "claude"),
             exclusions=ExclusionRules(

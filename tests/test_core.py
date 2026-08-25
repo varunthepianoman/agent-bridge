@@ -67,7 +67,10 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
-def test_discovery_is_candidate_only_and_selection_assigns_stable_number(tmp_path: Path) -> None:
+def test_discovery_is_candidate_only_and_selection_assigns_stable_number(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGENT_BRIDGE_NATIVE_LAUNCH", "0")
     app = create_app(settings=settings(tmp_path), provider=Provider())
     with TestClient(app) as client:
         assert client.post("/api/v1/reconciliation").status_code == 200
@@ -79,6 +82,8 @@ def test_discovery_is_candidate_only_and_selection_assigns_stable_number(tmp_pat
         ).json()["items"]
 
         assert {item["conversation_number"] for item in selected} == {1, 2}
+        assert all(item["native_launch_enabled"] is True for item in candidates)
+        assert all(item["native_launch_enabled"] is True for item in selected)
         child = next(item for item in selected if item["provider_thread_id"] == "child")
         assert child["conversation_kind"] == "native_subagent"
         assert child["delivery_mode"] == "catalog_only"

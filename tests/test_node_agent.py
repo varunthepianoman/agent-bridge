@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -11,7 +10,7 @@ import pytest
 from agent_bridge_node.agent import NodeAgent
 from agent_bridge_node.config import ExclusionRules, NodeAgentSettings
 from agent_bridge_node.hub import HubTransportError
-from agent_bridge_node.runner import CommandResult, NodeCommand
+from agent_bridge_node.runner import CommandResult, NodeCommand, NodeTurnEvent
 from agent_bridge_providers.codex import DiscoveredConversation
 
 
@@ -36,6 +35,7 @@ class FakeHub:
         self.environments: list[dict[str, Any]] = []
         self.results: list[CommandResult] = []
         self.beats: list[dict[str, Any]] = []
+        self.turn_events: list[NodeTurnEvent] = []
 
     def synchronize(
         self,
@@ -59,10 +59,14 @@ class FakeHub:
         self.beats.append(heartbeat)
         return {}
 
+    def report_turn_event(self, node_id: str, event: NodeTurnEvent) -> dict[str, Any]:
+        self.turn_events.append(event)
+        return {}
+
 
 @dataclass
 class FakeRunner:
-    def execute(self, request: NodeCommand) -> CommandResult:
+    async def execute(self, request: NodeCommand) -> CommandResult:
         return CommandResult(
             command_id=request.command_id,
             claim_token=request.claim_token,
@@ -175,8 +179,8 @@ async def test_busy_heartbeat_transport_failure_does_not_stop_provider_execution
     class SlowRunner:
         completed: bool = False
 
-        def execute(self, request: NodeCommand) -> CommandResult:
-            time.sleep(0.02)
+        async def execute(self, request: NodeCommand) -> CommandResult:
+            await asyncio.sleep(0.02)
             self.completed = True
             return CommandResult(
                 command_id=request.command_id,
@@ -225,7 +229,7 @@ async def test_completed_result_is_retried_without_rerunning_provider() -> None:
     class CountingRunner:
         calls: int = 0
 
-        def execute(self, request: NodeCommand) -> CommandResult:
+        async def execute(self, request: NodeCommand) -> CommandResult:
             self.calls += 1
             return CommandResult(
                 command_id=request.command_id,
@@ -254,3 +258,75 @@ async def test_completed_result_is_retried_without_rerunning_provider() -> None:
     assert runner.calls == 1
     assert hub.report_attempts == 2
     assert [result.command_id for result in hub.results] == ["cmd-1"]
+
+
+async def test_result_is_flushed_before_turn_event_and_event_retry_does_not_rerun() -> None:
+    class OrderedRetryHub(FakeHub):
+        def __init__(self, command: NodeCommand) -> None:
+            super().__init__([command])
+            self.calls: list[str] = []
+            self.event_attempts = 0
+
+        def claim_commands(self, node_id: str) -> list[NodeCommand]:
+            commands = self.commands
+            self.commands = []
+            return commands
+
+        def report_result(self, node_id: str, result: CommandResult) -> dict[str, Any]:
+            self.calls.append("result")
+            return super().report_result(node_id, result)
+
+        def report_turn_event(self, node_id: str, event: NodeTurnEvent) -> dict[str, Any]:
+            self.calls.append("event")
+            self.event_attempts += 1
+            if self.event_attempts == 1:
+                raise HubTransportError("Hub transport failed (ConnectError)")
+            return super().report_turn_event(node_id, event)
+
+    @dataclass
+    class EventRunner:
+        calls: int = 0
+        agent: NodeAgent | None = None
+
+        async def execute(self, request: NodeCommand) -> CommandResult:
+            self.calls += 1
+            assert self.agent is not None
+            self.agent.queue_turn_event(
+                NodeTurnEvent(
+                    event_id="node/thread/turn/completed",
+                    environment_id="host",
+                    provider="codex",
+                    provider_thread_id="thread",
+                    provider_turn_id="turn",
+                    command_id=request.command_id,
+                    status="completed",
+                )
+            )
+            return CommandResult(
+                command_id=request.command_id,
+                claim_token=request.claim_token,
+                status="succeeded",
+            )
+
+    settings = NodeAgentSettings(hub_url="http://localhost:8000", token="token")
+    command = NodeCommand(
+        command_id="cmd-start",
+        claim_token="claim-start",
+        kind="start_conversation",
+        environment_id="host",
+        provider="codex",
+        workspace="/tmp",
+        prompt="Inspect",
+    )
+    hub = OrderedRetryHub(command)
+    runner = EventRunner()
+    agent = NodeAgent(settings, hub, FakeProvider([]), runner)
+    runner.agent = agent
+
+    with pytest.raises(HubTransportError):
+        await agent.run_once()
+    await agent.run_once()
+
+    assert runner.calls == 1
+    assert hub.calls == ["result", "event", "event"]
+    assert len(hub.results) == len(hub.turn_events) == 1

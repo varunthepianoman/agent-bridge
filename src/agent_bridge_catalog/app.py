@@ -98,7 +98,7 @@ def create_app(
         )
         transport = managed_transport
     messages = MessageStore(db, transport, attention)
-    launcher = NativeLauncher(enabled=resolved.native_launch_enabled)
+    launcher = NativeLauncher()
     runtime = ConversationRuntime(
         codex_bin=resolved.codex_bin,
         claude_bin=resolved.claude_bin,
@@ -256,7 +256,7 @@ def create_app(
             folder = quote(row.cwd or ".", safe="")
             native_url = f"claude://code/new?folder={folder}"
         result["native_url"] = native_url
-        result["native_launch_enabled"] = launcher.enabled
+        result["native_launch_enabled"] = True
         return result
 
     app.state.database = db

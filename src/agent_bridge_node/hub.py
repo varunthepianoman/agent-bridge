@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from .runner import CommandResult, NodeCommand
+from .runner import CommandResult, NodeCommand, NodeTurnEvent
 
 
 class HubProtocolError(RuntimeError):
@@ -71,6 +71,12 @@ class HubClient:
         return self._post(
             f"/api/v1/node/commands/{result.command_id}/result",
             {"node_id": node_id, **result.model_dump(mode="json", exclude={"command_id"})},
+        )
+
+    def report_turn_event(self, node_id: str, event: NodeTurnEvent) -> Mapping[str, Any]:
+        return self._post(
+            "/api/v1/node/turn-events",
+            {"node_id": node_id, **event.model_dump(mode="json")},
         )
 
     def _post(self, path: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:

@@ -19,8 +19,11 @@ transcript sync, and provider/repository/folder/conversation exclusions. Non-loo
 use HTTPS.
 
 Commands are executed only when their `environment_id` matches the daemon. There is no fallback to
-another environment. Message turns and agent starts preserve provider configuration and approval
-behavior; explicit native UI launch additionally requires `AGENT_BRIDGE_NATIVE_LAUNCH=1`.
+another environment. Codex starts and turns use one supervised `codex app-server` process; Claude
+retains its subprocess implementation. The node reports a new Codex task after `thread/start` and
+`turn/start` are accepted, then reports initial-turn completion separately. Native UI and terminal
+launches are always permitted when the host supports them and still pass scheme, platform, path,
+and argv validation.
 
 Use `agent-bridge-node --once` from a Codex or Claude lifecycle hook to accelerate reconciliation.
 The periodic loop remains the repair mechanism if hooks are missing or fail.

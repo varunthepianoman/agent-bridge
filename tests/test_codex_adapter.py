@@ -161,9 +161,16 @@ class CodexAdapterTest(unittest.TestCase):
     def test_restarts_after_process_exit_without_replaying_inflight_request(self) -> None:
         async def scenario() -> None:
             async with make_client() as client:
+                closed: list[str] = []
+
+                async def observe_close(error: AppServerClosedError) -> None:
+                    closed.append(str(error))
+
+                client.add_close_handler(observe_close)
                 original_pid = client.diagnostics().pid
                 with self.assertRaises(AppServerClosedError):
                     await client.request("test/crash")
+                self.assertEqual(len(closed), 1)
                 result = await client.request("test/echo", {"value": "after restart"})
                 self.assertEqual(result, {"value": "after restart"})
                 diagnostics = client.diagnostics()

@@ -52,7 +52,8 @@ Agent Bridge delivers an incoming message as an ordinary provider user turn. It 
 robot-specific authorization layer. On this machine:
 
 - run Codex and `agent-bridge-node` as the normal robot-development user, never as `root`;
-- keep `AGENT_BRIDGE_NATIVE_LAUNCH=0` on the headless T-Box;
+- expect desktop deep links to fail as unsupported on the headless T-Box while provider turns
+  remain available;
 - use read-only smoke prompts until message routing is proven;
 - do not ask the smoke agent to invoke Acteris, the ARCI Adapter, RobotWare, EGM, controller RPCs,
   fieldbus/I/O, safety signals, or robot motion;
@@ -330,7 +331,6 @@ AGENT_BRIDGE_ENVIRONMENT_KIND=linux
 
 AGENT_BRIDGE_NODE_INTERVAL=10
 AGENT_BRIDGE_HTTP_TIMEOUT=30
-AGENT_BRIDGE_NATIVE_LAUNCH=0
 AGENT_BRIDGE_CODEX_BIN=<codex-bin>
 AGENT_BRIDGE_CLAUDE_BIN=claude
 
@@ -352,8 +352,8 @@ Important behavior:
 - `AGENT_BRIDGE_HUB_URL` is the HTTPS origin; the node appends `/api/v1/...`.
 - `AGENT_BRIDGE_API_URL` includes `/api/v1` and is inherited by Bridge-launched providers.
 - The absolute Codex path must point to the installation authenticated by `<tbox-user>`.
-- `AGENT_BRIDGE_NATIVE_LAUNCH=0` disables explicit desktop/terminal open actions on the headless
-  controller. Message delivery and starting provider conversations still work.
+- Desktop open actions fail based on the headless platform's actual launcher availability. There is
+  no separate native-launch policy switch; message delivery and provider starts still work.
 - Transcript sync remains off until the catalog and privacy boundary are verified.
 - Exclusions are applied locally before data leaves the T-Box.
 

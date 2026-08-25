@@ -135,7 +135,6 @@ def test_legacy_projection_query_api_is_removed(tmp_path: Path) -> None:
         node_id="hub",
         environment_id="test",
         codex_bin="codex",
-        native_launch_enabled=False,
     )
     app = create_app(settings=settings)
     with TestClient(app) as client:

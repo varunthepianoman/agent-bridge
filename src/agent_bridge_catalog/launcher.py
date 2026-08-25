@@ -17,18 +17,9 @@ class LaunchResult:
 
 
 class NativeLauncher:
-    def __init__(self, *, enabled: bool) -> None:
-        self.enabled = enabled
-
     def launch(self, command: str, *, requested: bool) -> LaunchResult:
         if not requested:
             return LaunchResult(command, False, "Command prepared; launch was not requested")
-        if not self.enabled:
-            return LaunchResult(
-                command,
-                False,
-                "Native launch is disabled; copy the command or set AGENT_BRIDGE_NATIVE_LAUNCH=1",
-            )
         argv, cwd = _parse_generated_command(command)
         if os.name == "nt":
             terminal_argv = ["wt.exe"]
@@ -55,12 +46,6 @@ class NativeLauncher:
     def open_url(self, url: str, *, requested: bool) -> LaunchResult:
         if not requested:
             return LaunchResult(url, False, "Desktop link prepared; launch was not requested")
-        if not self.enabled:
-            return LaunchResult(
-                url,
-                False,
-                "Native launch is disabled; set AGENT_BRIDGE_NATIVE_LAUNCH=1",
-            )
         if os.name == "nt":
             os.startfile(url)  # type: ignore[attr-defined]
             return LaunchResult(url, True, "Opened in the desktop app")

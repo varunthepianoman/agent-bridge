@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 from .config import ExclusionRules, NodeAgentSettings
 from .hub import HubTransportError
-from .runner import CommandResult, NodeCommand
+from .runner import CommandResult, NodeCommand, NodeTurnEvent
 
 LOGGER = logging.getLogger(__name__)
 _MAX_RETRY_DELAY_SECONDS = 60
@@ -56,9 +56,11 @@ class NodeHub(Protocol):
 
     def report_result(self, node_id: str, result: CommandResult) -> Mapping[str, Any]: ...
 
+    def report_turn_event(self, node_id: str, event: NodeTurnEvent) -> Mapping[str, Any]: ...
+
 
 class CommandRunner(Protocol):
-    def execute(self, request: NodeCommand) -> CommandResult: ...
+    async def execute(self, request: NodeCommand) -> CommandResult: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,9 +85,17 @@ class NodeAgent:
         self.provider = provider
         self.runner = runner
         self._pending_results: list[CommandResult] = []
+        self._pending_turn_events: list[NodeTurnEvent] = []
+
+    def queue_turn_event(self, event: NodeTurnEvent) -> None:
+        self._pending_turn_events.append(event)
+
+    def flush_pending(self) -> None:
+        self._report_pending_results()
+        self._report_pending_turn_events()
 
     async def run_once(self) -> NodeCycleResult:
-        self._report_pending_results()
+        self.flush_pending()
         records: list[dict[str, Any]] = []
         discovered = excluded = 0
         rules = self.settings.exclusions
@@ -123,13 +133,14 @@ class NodeAgent:
         for command in commands:
             heartbeat = asyncio.create_task(self._heartbeat_while_busy())
             try:
-                result = await asyncio.to_thread(self.runner.execute, command)
+                result = await self.runner.execute(command)
             finally:
                 heartbeat.cancel()
                 await asyncio.gather(heartbeat, return_exceptions=True)
-            failed += result.status == "failed"
+            failed += result.status != "succeeded"
             self._pending_results.append(result)
             self._report_pending_results()
+            self._report_pending_turn_events()
         heartbeat_ttl = max(15, min(600, round(self.settings.interval_seconds * 3)))
         self.hub.heartbeat(
             {
@@ -174,6 +185,12 @@ class NodeAgent:
             result = self._pending_results[0]
             self.hub.report_result(self.settings.node_id, result)
             self._pending_results.pop(0)
+
+    def _report_pending_turn_events(self) -> None:
+        while self._pending_turn_events:
+            event = self._pending_turn_events[0]
+            self.hub.report_turn_event(self.settings.node_id, event)
+            self._pending_turn_events.pop(0)
 
     def _heartbeat(self, ttl: int, busy: bool) -> None:
         heartbeat: dict[str, Any] = {

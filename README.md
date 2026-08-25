@@ -43,11 +43,12 @@ every 10 seconds. Enable **Auto-add new chats** in the Conversations header to c
 first discovered afterward, including provider-native subagents. Existing candidates remain
 unselected until you add them explicitly.
 
-With `AGENT_BRIDGE_NATIVE_LAUNCH=1`, each local conversation offers two independent actions:
-**Open in Codex/Claude** hands a provider deep link to the desktop operating system, while
-**Open in Terminal** resumes the exact local session with the provider CLI. Claude Desktop's public
-deep-link format opens a new Claude Code session in the same workspace; use Terminal when you need
-to resume the exact local Claude Code session.
+Each local conversation offers two independent actions: **Open in Codex/Claude** hands a provider
+deep link to the desktop operating system, while **Open in Terminal** resumes the exact local
+session with the provider CLI. Native launch is always allowed when the host supports the requested
+action; scheme, platform, executable, path, and argv validation still apply. Claude Desktop's
+public deep-link format opens a new Claude Code session in the same workspace; use Terminal when
+you need to resume the exact local Claude Code session.
 
 ## Interfaces
 
@@ -102,7 +103,6 @@ incompatibility. This integration contract is described in
 | `AGENT_BRIDGE_ENVIRONMENT_ID` | Stable host/container identity | `host` |
 | `AGENT_BRIDGE_CODEX_BIN` | Codex executable | `codex` |
 | `AGENT_BRIDGE_CLAUDE_BIN` | Claude executable | `claude` |
-| `AGENT_BRIDGE_NATIVE_LAUNCH` | Permit explicit terminal/UI launch | `0` |
 | `AGENT_BRIDGE_DISCOVERY_INTERVAL_SECONDS` | Local reconciliation cadence | `10` |
 | `AGENT_BRIDGE_NATS_SERVERS` | Comma-separated broker URLs | unset |
 | `AGENT_BRIDGE_NATS_REPLICAS` | JetStream stream replicas | `1` |

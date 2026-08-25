@@ -9,15 +9,17 @@ from contextlib import suppress
 from dataclasses import asdict
 
 from agent_bridge_providers import (
+    AppServerClient,
     ClaudeCatalogAdapter,
     CodexCatalogAdapter,
     CompositeCatalogAdapter,
 )
 
 from .agent import NodeAgent
+from .codex_runtime import RemoteCodexRuntime
 from .config import NodeAgentSettings
 from .hub import HubClient
-from .runner import NativeCommandRunner
+from .runner import NativeCommandRunner, RemoteCommandRunner
 
 
 def parser() -> argparse.ArgumentParser:
@@ -33,27 +35,38 @@ async def _run(*, once: bool) -> None:
         settings.token,
         timeout=settings.request_timeout_seconds,
     )
+    codex_client = AppServerClient((settings.codex_bin, "app-server"))
     provider = CompositeCatalogAdapter(
         [
-            CodexCatalogAdapter(codex_bin=settings.codex_bin),
+            CodexCatalogAdapter(codex_client, codex_bin=settings.codex_bin),
             ClaudeCatalogAdapter(claude_bin=settings.claude_bin),
         ]
     )
-    runner = NativeCommandRunner(
+    native_runner = NativeCommandRunner(
         environment_id=settings.environment_id,
-        enabled=settings.native_launch_enabled,
         codex_bin=settings.codex_bin,
         claude_bin=settings.claude_bin,
         platform_name=settings.environment_kind,
     )
+    codex_runtime = RemoteCodexRuntime(
+        codex_client,
+        node_id=settings.node_id,
+    )
+    runner = RemoteCommandRunner(native_runner, codex_runtime)
     agent = NodeAgent(settings, hub, provider, runner)
+    codex_runtime.set_event_sink(agent.queue_turn_event)
     try:
         if once:
-            print(json.dumps(asdict(await agent.run_once()), sort_keys=True))
+            cycle = await agent.run_once()
+            await codex_runtime.wait_for_background()
+            agent.flush_pending()
+            print(json.dumps(asdict(cycle), sort_keys=True))
         else:
             await agent.serve()
     finally:
+        await codex_runtime.close()
         await provider.close()
+        await codex_client.close()
         hub.close()
 
 

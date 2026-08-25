@@ -253,7 +253,6 @@ $env:AGENT_BRIDGE_ENVIRONMENT_KIND = 'windows'
 
 $env:AGENT_BRIDGE_NODE_INTERVAL = '10'
 $env:AGENT_BRIDGE_HTTP_TIMEOUT = '30'
-$env:AGENT_BRIDGE_NATIVE_LAUNCH = '1'
 $env:AGENT_BRIDGE_CODEX_BIN = '<codex-exe>'
 $env:AGENT_BRIDGE_CLAUDE_BIN = 'claude.exe'
 
@@ -270,8 +269,8 @@ Important behavior:
 - The general CLI URL includes `/api/v1`. Child Codex/Claude processes inherit it and can reply
   through Bridge.
 - A ten-second interval controls discovery, command polling, and heartbeats.
-- `AGENT_BRIDGE_NATIVE_LAUNCH=1` permits explicit **Open in Terminal/provider** actions. Message
-  delivery and starting a new provider conversation do not depend on this switch.
+- **Open in Terminal/provider** actions are always permitted when Windows supports the requested
+  action. The node still validates the native URL, executable, path, and fixed argument vector.
 - Transcript sync starts disabled for the first test. Titles, status, paths, and other catalog
   metadata still synchronize. Enable it later only after confirming the expected privacy boundary.
 - Use the exclusion variables before the first sync if any local providers, repositories, folders,

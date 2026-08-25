@@ -47,6 +47,9 @@ class AppServerClosedError(RuntimeError):
     """The App Server connection closed before an operation completed."""
 
 
+CloseHandler = Callable[[AppServerClosedError], Awaitable[None] | None]
+
+
 @dataclass(frozen=True, slots=True)
 class AppServerDiagnostics:
     """A point-in-time, safe-to-display supervisor status snapshot."""
@@ -98,6 +101,7 @@ class AppServerClient:
             maxsize=notification_queue_size
         )
         self._notification_handlers: list[NotificationHandler] = []
+        self._close_handlers: list[CloseHandler] = []
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self._write_lock = asyncio.Lock()
         self._lifecycle_lock = asyncio.Lock()
@@ -145,6 +149,9 @@ class AppServerClient:
 
     def add_notification_handler(self, handler: NotificationHandler) -> None:
         self._notification_handlers.append(handler)
+
+    def add_close_handler(self, handler: CloseHandler) -> None:
+        self._close_handlers.append(handler)
 
     async def next_notification(
         self, *, timeout: float | None = None
@@ -368,11 +375,13 @@ class AppServerClient:
             return_code = await process.wait()
             if generation == self._generation and process is self._process:
                 self._last_exit_code = return_code
-                if not self._closing and self._state != "stopped":
-                    self._state = "failed"
-                self._fail_pending(
-                    AppServerClosedError(f"Codex App Server exited with status {return_code}")
+                error = AppServerClosedError(
+                    f"Codex App Server exited with status {return_code}"
                 )
+                if not self._closing and self._state not in {"stopping", "stopped", "closed"}:
+                    self._state = "failed"
+                    await self._publish_close(error)
+                self._fail_pending(error)
 
     async def _read_stderr(self, process: asyncio.subprocess.Process) -> None:
         assert process.stderr is not None
@@ -441,6 +450,15 @@ class AppServerClient:
                     await result
             except Exception as exc:
                 self._recent_stderr.append(f"notification handler failed for {method}: {exc}")
+
+    async def _publish_close(self, error: AppServerClosedError) -> None:
+        for handler in tuple(self._close_handlers):
+            try:
+                result = handler(error)
+                if result is not None:
+                    await result
+            except Exception as exc:
+                self._recent_stderr.append(f"close handler failed: {exc}")
 
     async def _stop_process(self, *, expected: bool) -> None:
         process = self._process

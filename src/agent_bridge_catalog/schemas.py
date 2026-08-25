@@ -64,3 +64,15 @@ class NodeCommandResultRequest(Input):
     status: str = Field(pattern="^(succeeded|blocked|failed|cancelled)$")
     detail: str | None = Field(default=None, max_length=50_000)
     output: dict[str, Any] = Field(default_factory=dict)
+
+
+class NodeTurnEventRequest(Input):
+    event_id: str = Field(min_length=1, max_length=500)
+    node_id: str = Field(min_length=1, max_length=160)
+    environment_id: str = Field(min_length=1, max_length=160)
+    provider: str = Field(pattern="^codex$")
+    provider_thread_id: str = Field(min_length=1, max_length=500)
+    provider_turn_id: str = Field(min_length=1, max_length=500)
+    command_id: str = Field(min_length=1, max_length=160)
+    status: str = Field(pattern="^(completed|failed|interrupted)$")
+    detail: str | None = Field(default=None, max_length=50_000)

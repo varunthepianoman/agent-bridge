@@ -25,7 +25,7 @@ def test_unrecognized_shell_operators_are_not_executed() -> None:
 def test_terminator_uses_execute_argv_and_working_directory(
     _realpath: Mock, _which: Mock, popen: Mock
 ) -> None:
-    result = NativeLauncher(enabled=True).launch(
+    result = NativeLauncher().launch(
         "cd '/work/robot project' && claude --dangerously-skip-permissions --resume session-1",
         requested=True,
     )
@@ -49,7 +49,7 @@ def test_terminator_uses_execute_argv_and_working_directory(
 @patch("agent_bridge_catalog.launcher.subprocess.Popen")
 @patch("agent_bridge_catalog.launcher.shutil.which", return_value="/usr/bin/xdg-open")
 def test_desktop_url_is_opened_by_the_operating_system(_which: Mock, popen: Mock) -> None:
-    result = NativeLauncher(enabled=True).open_url(
+    result = NativeLauncher().open_url(
         "claude://code/new?folder=%2Fwork%2Frepo", requested=True
     )
 

@@ -5,6 +5,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Request
 
 from .nodes import NodeAuthenticationError, NodeStore
+from .repository import stable_conversation_id
 from .schemas import (
     NodeCatalogSyncRequest,
     NodeCommandClaimRequest,
@@ -12,6 +13,7 @@ from .schemas import (
     NodeHeartbeatRequest,
     NodeProvisionRequest,
     NodeRegistration,
+    NodeTurnEventRequest,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -191,6 +193,50 @@ def command_result(
                 kind="turn_completed",
                 title="Remote conversation finished a turn",
                 conversation_id=result.get("conversation_id"),
+            )
+        return result
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except NodeAuthenticationError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/node/turn-events")
+def turn_event(
+    payload: NodeTurnEventRequest,
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    store = _store(request)
+    _authenticate(store, payload.node_id, authorization)
+    conversation_id = stable_conversation_id(
+        payload.provider,
+        payload.provider_thread_id,
+        payload.node_id,
+        payload.environment_id,
+    )
+    try:
+        if not request.app.state.repository.get(conversation_id):
+            raise ValueError("turn event conversation is not cataloged yet")
+        result = store.record_turn_event(payload.model_dump(mode="json"))
+        if result["already_recorded"]:
+            return result
+        if payload.status == "completed":
+            request.app.state.attention.create(
+                category="update",
+                kind="turn_completed",
+                title="Remote conversation finished its initial turn",
+                conversation_id=conversation_id,
+            )
+        else:
+            request.app.state.attention.create(
+                category="needs_attention",
+                kind=f"turn_{payload.status}",
+                title=f"Remote conversation initial turn {payload.status}",
+                detail=payload.detail or "",
+                conversation_id=conversation_id,
             )
         return result
     except LookupError as exc:
