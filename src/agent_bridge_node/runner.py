@@ -267,11 +267,18 @@ class NativeCommandRunner:
         parsed = urlparse(request.native_url)
         if parsed.scheme != "codex":
             return self._failure(request, "only Codex native URLs are supported")
-        if not self.platform_name.casefold().startswith("win"):
-            return self._failure(request, "native Codex URLs are supported only on Windows")
+        platform = self.platform_name.casefold()
+        if platform.startswith("win"):
+            argv = ["explorer.exe", request.native_url]
+        elif platform in {"linux", "wsl"}:
+            argv = ["xdg-open", request.native_url]
+        elif platform == "darwin":
+            argv = ["open", request.native_url]
+        else:
+            return self._failure(request, f"platform {self.platform_name!r} is unsupported")
         return self._launch(
             request,
-            ["explorer.exe", request.native_url],
+            argv,
             "Codex opened in the desktop app",
         )
 

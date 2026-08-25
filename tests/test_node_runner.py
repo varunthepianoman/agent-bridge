@@ -153,9 +153,14 @@ def test_open_path_and_codex_url_are_always_permitted(tmp_path: Path) -> None:
     ]
 
 
-def test_native_codex_url_remains_windows_only() -> None:
+def test_native_codex_url_uses_platform_launcher() -> None:
     launcher = RecordingLauncher()
-    for platform_name in ("linux", "wsl", "darwin"):
+    for platform_name, expected in (
+        ("windows", ["explorer.exe", "codex://threads/thread-123"]),
+        ("linux", ["xdg-open", "codex://threads/thread-123"]),
+        ("wsl", ["xdg-open", "codex://threads/thread-123"]),
+        ("darwin", ["open", "codex://threads/thread-123"]),
+    ):
         result = NativeCommandRunner(
             environment_id="host", platform_name=platform_name, launcher=launcher
         ).execute(
@@ -167,9 +172,8 @@ def test_native_codex_url_remains_windows_only() -> None:
                 native_url="codex://threads/thread-123",
             )
         )
-        assert result.status == "failed"
-        assert result.detail == "native Codex URLs are supported only on Windows"
-    assert launcher.calls == []
+        assert result.status == "succeeded"
+        assert launcher.calls[-1] == expected
 
 
 def test_native_url_preserves_scheme_and_unknown_platform_validation() -> None:

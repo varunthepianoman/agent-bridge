@@ -195,9 +195,12 @@ async def test_busy_heartbeat_transport_failure_does_not_stop_provider_execution
     command = NodeCommand(
         command_id="cmd-1",
         claim_token="claim-1",
-        kind="open_path",
+        kind="deliver_turn",
         environment_id="host",
-        path="/x",
+        provider="codex",
+        provider_thread_id="thread-1",
+        workspace="/tmp",
+        prompt="Continue",
     )
     runner = SlowRunner()
     hub = BusyHeartbeatHub([command])
@@ -207,6 +210,66 @@ async def test_busy_heartbeat_transport_failure_does_not_stop_provider_execution
     assert runner.completed is True
     assert result.commands == 1
     assert hub.results[0].command_id == "cmd-1"
+
+
+async def test_native_open_is_not_blocked_by_long_provider_turn() -> None:
+    class SequentialHub(FakeHub):
+        def claim_commands(self, node_id: str) -> list[NodeCommand]:
+            return [self.commands.pop(0)] if self.commands else []
+
+    provider_started = asyncio.Event()
+    release_provider = asyncio.Event()
+    native_opened = asyncio.Event()
+
+    @dataclass
+    class ConcurrentRunner:
+        async def execute(self, request: NodeCommand) -> CommandResult:
+            if request.kind == "deliver_turn":
+                provider_started.set()
+                await release_provider.wait()
+            elif request.kind == "open_native_url":
+                native_opened.set()
+            return CommandResult(
+                command_id=request.command_id,
+                claim_token=request.claim_token,
+                status="succeeded",
+            )
+
+    settings = NodeAgentSettings(
+        hub_url="http://localhost:8000", token="token", interval_seconds=0.01
+    )
+    hub = SequentialHub(
+        [
+            NodeCommand(
+                command_id="cmd-turn",
+                claim_token="claim-turn",
+                kind="deliver_turn",
+                environment_id="host",
+                provider="codex",
+                provider_thread_id="thread-1",
+                prompt="Keep working",
+                workspace="/tmp",
+            ),
+            NodeCommand(
+                command_id="cmd-open",
+                claim_token="claim-open",
+                kind="open_native_url",
+                environment_id="host",
+                native_url="codex://threads/thread-1",
+            ),
+        ]
+    )
+    agent = NodeAgent(settings, hub, FakeProvider([]), ConcurrentRunner())
+
+    await agent.run_once(background_commands=True)
+    await asyncio.wait_for(provider_started.wait(), timeout=0.1)
+    await agent.run_once(background_commands=True)
+    await asyncio.wait_for(native_opened.wait(), timeout=0.1)
+
+    assert not release_provider.is_set()
+    release_provider.set()
+    await asyncio.gather(*list(agent._command_tasks))
+    assert {result.command_id for result in hub.results} == {"cmd-turn", "cmd-open"}
 
 
 async def test_completed_result_is_retried_without_rerunning_provider() -> None:

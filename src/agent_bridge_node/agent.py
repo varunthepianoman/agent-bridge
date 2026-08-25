@@ -86,6 +86,8 @@ class NodeAgent:
         self.runner = runner
         self._pending_results: list[CommandResult] = []
         self._pending_turn_events: list[NodeTurnEvent] = []
+        self._command_tasks: dict[asyncio.Task[None], NodeCommand] = {}
+        self._provider_command_lock = asyncio.Lock()
 
     def queue_turn_event(self, event: NodeTurnEvent) -> None:
         self._pending_turn_events.append(event)
@@ -94,7 +96,7 @@ class NodeAgent:
         self._report_pending_results()
         self._report_pending_turn_events()
 
-    async def run_once(self) -> NodeCycleResult:
+    async def run_once(self, *, background_commands: bool = False) -> NodeCycleResult:
         self.flush_pending()
         records: list[dict[str, Any]] = []
         discovered = excluded = 0
@@ -131,26 +133,77 @@ class NodeAgent:
         commands = self.hub.claim_commands(self.settings.node_id)
         failed = 0
         for command in commands:
-            heartbeat = asyncio.create_task(self._heartbeat_while_busy())
-            try:
-                result = await self.runner.execute(command)
-            finally:
-                heartbeat.cancel()
-                await asyncio.gather(heartbeat, return_exceptions=True)
-            failed += result.status != "succeeded"
-            self._pending_results.append(result)
-            self._report_pending_results()
-            self._report_pending_turn_events()
+            if background_commands:
+                self._start_command(command)
+            else:
+                result = await self._execute_command(command)
+                failed += result.status != "succeeded"
+                self._record_result(result)
         heartbeat_ttl = max(15, min(600, round(self.settings.interval_seconds * 3)))
         self.hub.heartbeat(
             {
                 "node_id": self.settings.node_id,
                 "ttl_seconds": heartbeat_ttl,
                 "capabilities": ["catalog.collect", "native.resume", "native.open"],
-                "metadata": {"busy": False},
+                "metadata": {"busy": self._provider_is_busy()},
             }
         )
         return NodeCycleResult(discovered, len(records), excluded, len(commands), failed)
+
+    def _start_command(self, command: NodeCommand) -> None:
+        task = asyncio.create_task(
+            self._run_background_command(command),
+            name=f"node-command-{command.command_id}",
+        )
+        self._command_tasks[task] = command
+        task.add_done_callback(self._command_finished)
+
+    async def _run_background_command(self, command: NodeCommand) -> None:
+        result = await self._execute_command(command)
+        self._record_result(result)
+
+    async def _execute_command(self, command: NodeCommand) -> CommandResult:
+        heartbeat = (
+            asyncio.create_task(self._heartbeat_while_busy())
+            if self._is_provider_command(command)
+            else None
+        )
+        try:
+            if self._is_provider_command(command):
+                async with self._provider_command_lock:
+                    return await self.runner.execute(command)
+            return await self.runner.execute(command)
+        finally:
+            if heartbeat is not None:
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
+
+    def _record_result(self, result: CommandResult) -> None:
+        self._pending_results.append(result)
+        self._report_pending_results()
+        self._report_pending_turn_events()
+
+    def _command_finished(self, task: asyncio.Task[None]) -> None:
+        command = self._command_tasks.pop(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            LOGGER.error(
+                "Node command %s failed before reporting a result",
+                command.command_id,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    @staticmethod
+    def _is_provider_command(command: NodeCommand) -> bool:
+        return command.kind in {"start_conversation", "deliver_turn"}
+
+    def _provider_is_busy(self) -> bool:
+        return any(
+            self._is_provider_command(command) and not task.done()
+            for task, command in self._command_tasks.items()
+        )
 
     async def _heartbeat_while_busy(self) -> None:
         ttl = max(15, min(600, round(self.settings.interval_seconds * 3)))
@@ -169,17 +222,25 @@ class NodeAgent:
 
     async def serve(self) -> None:
         failures = 0
-        while True:
-            try:
-                await self.run_once()
-            except HubTransportError as error:
-                failures += 1
-                delay = self._retry_delay(failures)
-                LOGGER.warning("Hub communication failed; retrying in %s seconds: %s", delay, error)
-                await asyncio.sleep(delay)
-            else:
-                failures = 0
-                await asyncio.sleep(self.settings.interval_seconds)
+        try:
+            while True:
+                try:
+                    await self.run_once(background_commands=True)
+                except HubTransportError as error:
+                    failures += 1
+                    delay = self._retry_delay(failures)
+                    LOGGER.warning(
+                        "Hub communication failed; retrying in %s seconds: %s", delay, error
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    failures = 0
+                    await asyncio.sleep(self.settings.interval_seconds)
+        finally:
+            tasks = list(self._command_tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _report_pending_results(self) -> None:
         while self._pending_results:
