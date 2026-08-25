@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import Coroutine, Mapping
 from pathlib import Path
@@ -16,6 +17,8 @@ from agent_bridge_providers import (
     CodexIpcSteering,
 )
 from agent_bridge_providers.codex.app_server import AppServerClient, AppServerError
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationWriterBusy(RuntimeError):
@@ -63,7 +66,7 @@ class ConversationRuntime:
             thread = await self.codex.start_thread(cwd=str(workspace), model=model)
             thread_id = str(thread["id"])
             self._background(
-                self._codex_turn(thread_id, prompt, model=model, effort=effort)
+                self._codex_turn_and_release(thread_id, prompt, model=model, effort=effort)
             )
             return thread_id
         if provider == "claude":
@@ -97,14 +100,20 @@ class ConversationRuntime:
             raise ConversationWriterBusy("conversation already has an active Bridge-delivered turn")
         async with lock:
             if provider == "codex":
+                owns_thread = not resume
                 if resume:
                     try:
                         await self.codex.resume_thread(provider_thread_id, cwd=cwd)
+                        owns_thread = True
                     except AppServerError as exc:
                         if exc.code == -32600 and "already has an active writer" in exc.message:
                             raise ConversationWriterBusy(exc.message) from exc
                         raise
-                await self._codex_turn(provider_thread_id, prompt, effort=effort)
+                try:
+                    await self._codex_turn(provider_thread_id, prompt, effort=effort)
+                finally:
+                    if owns_thread:
+                        await self._release_codex_thread(provider_thread_id)
                 return
             if provider == "claude":
                 await self._claude_turn(
@@ -181,6 +190,29 @@ class ConversationRuntime:
             finally:
                 self._codex_waiters.pop(turn_id, None)
         self._raise_for_codex_turn(completed)
+
+    async def _codex_turn_and_release(
+        self,
+        thread_id: str,
+        prompt: str,
+        *,
+        model: str | None = None,
+        effort: str | None = None,
+    ) -> None:
+        try:
+            await self._codex_turn(thread_id, prompt, model=model, effort=effort)
+        finally:
+            await self._release_codex_thread(thread_id)
+
+    async def _release_codex_thread(self, thread_id: str) -> None:
+        try:
+            await self.codex.unsubscribe_thread(thread_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A completed turn must not be replayed merely because cleanup failed.
+            # Keep the failure visible while preserving the original turn outcome.
+            logger.exception("failed to release Codex writer for thread %s", thread_id)
 
     async def _codex_notification(self, method: str, params: Mapping[str, Any]) -> None:
         if method != "turn/completed":

@@ -232,6 +232,18 @@ class AppServerClient:
         )
         return self._require_mapping(result.get("thread"), "thread/resume result.thread")
 
+    async def unsubscribe_thread(self, thread_id: str) -> str:
+        result = self._require_mapping(
+            await self.request("thread/unsubscribe", {"threadId": thread_id}),
+            "thread/unsubscribe result",
+        )
+        status = result.get("status")
+        if status not in {"notLoaded", "notSubscribed", "unsubscribed"}:
+            raise AppServerProtocolError(
+                f"thread/unsubscribe result.status is invalid: {status!r}"
+            )
+        return str(status)
+
     async def start_turn(
         self,
         thread_id: str,

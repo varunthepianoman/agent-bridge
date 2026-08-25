@@ -60,6 +60,7 @@ class CodexAdapterTest(unittest.TestCase):
                 resumed = await client.resume_thread("thr_new", cwd="/tmp")
                 self.assertEqual(resumed["id"], "thr_new")
                 self.assertTrue(resumed["fullAccess"])
+                self.assertEqual(await client.unsubscribe_thread("thr_new"), "unsubscribed")
                 turn = await client.start_turn(
                     "thr_new",
                     "Check the socket",

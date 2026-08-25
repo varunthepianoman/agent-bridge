@@ -144,6 +144,8 @@ for raw_line in sys.stdin:
                 },
             }
         )
+    elif method == "thread/unsubscribe":
+        send({"id": request_id, "result": {"status": "unsubscribed"}})
     elif method == "turn/start":
         turn = {
             "id": "turn_new",
