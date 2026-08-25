@@ -293,7 +293,6 @@ class AppServerClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                limit=16 * 1024 * 1024,
                 env=env,
             )
         except Exception:
@@ -358,17 +357,16 @@ class AppServerClient:
 
     async def _read_stdout(self, process: asyncio.subprocess.Process, generation: int) -> None:
         assert process.stdout is not None
+        buffered = bytearray()
         try:
-            while line := await process.stdout.readline():
-                try:
-                    message = json.loads(line)
-                    if not isinstance(message, dict):
-                        raise ValueError("message is not an object")
-                except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-                    self._malformed_messages += 1
-                    self._recent_stderr.append(f"malformed stdout message: {exc}")
-                    continue
-                await self._dispatch(message)
+            while chunk := await process.stdout.read(64 * 1024):
+                buffered.extend(chunk)
+                while (newline := buffered.find(b"\n")) >= 0:
+                    line = bytes(buffered[:newline])
+                    del buffered[: newline + 1]
+                    await self._dispatch_stdout_line(line)
+            if buffered:
+                await self._dispatch_stdout_line(bytes(buffered))
         except asyncio.CancelledError:
             raise
         finally:
@@ -382,6 +380,17 @@ class AppServerClient:
                     self._state = "failed"
                     await self._publish_close(error)
                 self._fail_pending(error)
+
+    async def _dispatch_stdout_line(self, line: bytes) -> None:
+        try:
+            message = json.loads(line)
+            if not isinstance(message, dict):
+                raise ValueError("message is not an object")
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            self._malformed_messages += 1
+            self._recent_stderr.append(f"malformed stdout message: {exc}")
+            return
+        await self._dispatch(message)
 
     async def _read_stderr(self, process: asyncio.subprocess.Process) -> None:
         assert process.stderr is not None

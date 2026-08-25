@@ -166,7 +166,7 @@ for raw_line in sys.stdin:
     elif method == "test/echo":
         threading.Thread(target=delayed_echo, args=(request_id, params), daemon=True).start()
     elif method == "test/large":
-        send({"id": request_id, "result": {"value": "x" * (128 * 1024)}})
+        send({"id": request_id, "result": {"value": "x" * (17 * 1024 * 1024)}})
     elif method == "test/malformed":
         with _write_lock:
             sys.stdout.write("not-json\n")
