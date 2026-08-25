@@ -154,7 +154,7 @@ class CodexAdapterTest(unittest.TestCase):
         async def scenario() -> None:
             async with make_client() as client:
                 result = await client.request("test/large")
-                self.assertEqual(len(result["value"]), 128 * 1024)
+                self.assertEqual(len(result["value"]), 17 * 1024 * 1024)
 
         asyncio.run(scenario())
 
