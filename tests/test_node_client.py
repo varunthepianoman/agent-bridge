@@ -79,6 +79,20 @@ def test_hub_client_sanitizes_transport_errors() -> None:
         raise AssertionError("transport error was not wrapped")
 
 
+def test_hub_client_retries_transient_http_statuses() -> None:
+    def handle(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(502, text="upstream unavailable")
+
+    client = HubClient("https://hub.example", "node-secret", transport=httpx.MockTransport(handle))
+    try:
+        client.heartbeat({"node_id": "node-a", "ttl_seconds": 30})
+    except HubTransportError as error:
+        assert str(error) == "Hub returned transient HTTP status 502"
+        assert "upstream unavailable" not in str(error)
+    else:
+        raise AssertionError("transient HTTP status was not wrapped")
+
+
 def _body(request: httpx.Request) -> dict[str, Any]:
     value = json.loads(request.content)
     assert isinstance(value, dict)
