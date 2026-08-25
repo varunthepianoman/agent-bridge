@@ -86,7 +86,13 @@ class HubClient:
             raise HubTransportError(
                 f"Hub transport failed ({type(error).__name__})"
             ) from None
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            status = error.response.status_code
+            if status in {408, 425, 429} or 500 <= status < 600:
+                raise HubTransportError(f"Hub returned transient HTTP status {status}") from None
+            raise
         if not response.content:
             return {}
         value = response.json()
