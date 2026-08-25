@@ -14,6 +14,10 @@ class HubProtocolError(RuntimeError):
     """The hub returned a response that cannot be safely interpreted."""
 
 
+class HubTransportError(RuntimeError):
+    """A transient transport failure, with no request payload or credential details."""
+
+
 class HubClient:
     def __init__(
         self,
@@ -70,7 +74,12 @@ class HubClient:
         )
 
     def _post(self, path: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        response = self._client.post(path, json=dict(payload))
+        try:
+            response = self._client.post(path, json=dict(payload))
+        except httpx.TransportError as error:
+            raise HubTransportError(
+                f"Hub transport failed ({type(error).__name__})"
+            ) from None
         response.raise_for_status()
         if not response.content:
             return {}

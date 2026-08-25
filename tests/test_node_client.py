@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from agent_bridge_node.hub import HubClient
+from agent_bridge_node.hub import HubClient, HubTransportError
 from agent_bridge_node.runner import CommandResult
 
 
@@ -63,6 +63,20 @@ def test_hub_client_uses_fenced_single_command_contract() -> None:
         "detail": "opened",
         "output": {},
     }
+
+
+def test_hub_client_sanitizes_transport_errors() -> None:
+    def handle(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("https://user:secret@hub.example/request-body")
+
+    client = HubClient("https://hub.example", "node-secret", transport=httpx.MockTransport(handle))
+    try:
+        client.heartbeat({"node_id": "node-a", "ttl_seconds": 30})
+    except HubTransportError as error:
+        assert str(error) == "Hub transport failed (ConnectError)"
+        assert "secret" not in str(error)
+    else:
+        raise AssertionError("transport error was not wrapped")
 
 
 def _body(request: httpx.Request) -> dict[str, Any]:

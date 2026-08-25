@@ -132,6 +132,9 @@ def command_result(
             status=payload.status,
             result={"detail": payload.detail, "output": payload.output},
         )
+        already_completed = bool(result.pop("_already_completed", False))
+        if already_completed:
+            return result
         message_id = payload.output.get("message_id")
         if isinstance(message_id, str):
             request.app.state.messages.set_state(

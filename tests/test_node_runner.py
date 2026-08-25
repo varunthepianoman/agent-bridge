@@ -373,3 +373,73 @@ def test_start_and_resume_claude_pass_only_supported_configuration(
         "--print",
         "Look more deeply",
     ]
+
+
+def test_provider_subprocesses_use_utf8_even_for_non_windows_codepage_output(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(kwargs)
+        return subprocess.CompletedProcess(
+            argv, 0, stdout='{"thread_id":"thread-\u2603"}\n', stderr=""
+        )
+
+    monkeypatch.setattr("agent_bridge_node.runner.subprocess.run", run)
+    result = NativeCommandRunner(environment_id="host", enabled=True).execute(
+        NodeCommand(
+            command_id="cmd-utf8",
+            claim_token="claim-utf8",
+            kind="start_conversation",
+            environment_id="host",
+            workspace=str(tmp_path),
+            prompt="hi",
+        )
+    )
+
+    assert result.status == "succeeded"
+    assert result.output["provider_thread_id"] == "thread-☃"
+    assert calls[0]["encoding"] == "utf-8"
+    assert calls[0]["errors"] == "replace"
+
+
+def test_provider_failure_tolerates_missing_subprocess_streams(monkeypatch, tmp_path: Path) -> None:
+    def run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 1, stdout=None, stderr=None)
+
+    monkeypatch.setattr("agent_bridge_node.runner.subprocess.run", run)
+    result = NativeCommandRunner(environment_id="host", enabled=True).execute(
+        NodeCommand(
+            command_id="cmd-no-streams",
+            claim_token="claim-no-streams",
+            kind="deliver_turn",
+            environment_id="host",
+            provider_thread_id="thread-existing",
+            workspace=str(tmp_path),
+            prompt="hi",
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.detail == "provider turn failed"
+
+
+def test_successful_codex_start_without_thread_id_is_failed(monkeypatch, tmp_path: Path) -> None:
+    def run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 0, stdout=None, stderr=None)
+
+    monkeypatch.setattr("agent_bridge_node.runner.subprocess.run", run)
+    result = NativeCommandRunner(environment_id="host", enabled=True).execute(
+        NodeCommand(
+            command_id="cmd-no-thread",
+            claim_token="claim-no-thread",
+            kind="start_conversation",
+            environment_id="host",
+            workspace=str(tmp_path),
+            prompt="hi",
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.detail == "Codex completed successfully but did not report a provider thread id"

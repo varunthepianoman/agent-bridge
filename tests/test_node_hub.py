@@ -168,6 +168,55 @@ def test_remote_command_is_fenced_by_node_and_claim_token(tmp_path: Path) -> Non
     ).json() == {"command": None}
 
 
+def test_terminal_result_retries_are_idempotent_but_conflicts_are_rejected(tmp_path: Path) -> None:
+    client, store, _repository = _client(tmp_path)
+    credential = "a sufficiently long node credential"
+    client.post(
+        "/api/v1/nodes",
+        json={
+            "node_id": "node-linux",
+            "display_name": "Linux",
+            "platform": "linux",
+            "credential": credential,
+        },
+    )
+    headers = {"Authorization": f"Bearer {credential}"}
+    client.post(
+        "/api/v1/node/heartbeat",
+        json={"node_id": "node-linux", "ttl_seconds": 30},
+        headers=headers,
+    )
+    queued = store.queue_command(node_id="node-linux", kind="open_path", payload={"path": "/tmp"})
+    command = client.post(
+        "/api/v1/node/commands/claim", json={"node_id": "node-linux"}, headers=headers
+    ).json()["command"]
+    body = {
+        "node_id": "node-linux",
+        "claim_token": command["claim_token"],
+        "status": "succeeded",
+        "detail": "opened",
+        "output": {"pid": 42},
+    }
+    result_path = f"/api/v1/node/commands/{queued['command_id']}/result"
+    first = client.post(result_path, json=body, headers=headers)
+    retried = client.post(result_path, json=body, headers=headers)
+    conflicting = client.post(
+        result_path,
+        json={**body, "status": "failed"},
+        headers=headers,
+    )
+    wrong_token = client.post(
+        result_path,
+        json={**body, "claim_token": "wrong-claim-token-that-is-long"},
+        headers=headers,
+    )
+
+    assert first.status_code == retried.status_code == 200
+    assert first.json() == retried.json()
+    assert conflicting.status_code == 409
+    assert wrong_token.status_code == 401
+
+
 def test_environment_identity_is_scoped_to_owning_node(tmp_path: Path) -> None:
     client, _store, repository = _client(tmp_path)
     for node_id in ("node-a", "node-b"):

@@ -321,10 +321,17 @@ class NodeStore:
             row = session.get(NodeCommandRow, command_id)
             if row is None or row.node_id != node_id:
                 raise LookupError("command not found")
-            if row.status != "claimed" or row.claim_token_hash is None:
-                raise ValueError("command is not currently claimed")
-            if not hmac.compare_digest(row.claim_token_hash, _token_hash(claim_token)):
+            if row.claim_token_hash is None or not hmac.compare_digest(
+                row.claim_token_hash, _token_hash(claim_token)
+            ):
                 raise NodeAuthenticationError("invalid command claim token")
+            if row.status != "claimed":
+                existing_result = json.loads(row.result_json) if row.result_json else {}
+                if row.status == status and existing_result == result:
+                    command = self._command_dict(row)
+                    command["_already_completed"] = True
+                    return command
+                raise ValueError("command already has a different terminal result")
             row.status = status
             row.result_json = _json(result)
             row.completed_at = datetime.now(UTC)

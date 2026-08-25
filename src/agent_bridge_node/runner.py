@@ -125,16 +125,25 @@ class NativeCommandRunner:
                 cwd=workspace,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=24 * 60 * 60,
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             return self._failure(request, f"provider agent failed to start: {error}")
+        stdout = completed.stdout or ""
+        stderr = completed.stderr or ""
         if completed.returncode:
-            detail = (completed.stderr or completed.stdout)[-2_000:]
+            detail = (stderr or stdout)[-2_000:]
             return self._failure(request, detail or "provider agent failed")
         if request.provider == "codex":
-            session_id = self._codex_thread_id(completed.stdout)
+            session_id = self._codex_thread_id(stdout)
+            if session_id is None:
+                return self._failure(
+                    request,
+                    "Codex completed successfully but did not report a provider thread id",
+                )
         return CommandResult(
             command_id=request.command_id,
             claim_token=request.claim_token,
@@ -189,13 +198,17 @@ class NativeCommandRunner:
                 cwd=workspace,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=24 * 60 * 60,
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             return self._failure(request, f"provider turn failed to start: {error}")
+        stdout = completed.stdout or ""
+        stderr = completed.stderr or ""
         if completed.returncode:
-            detail = (completed.stderr or completed.stdout)[-2_000:]
+            detail = (stderr or stdout)[-2_000:]
             return self._failure(request, detail or "provider turn failed")
         return CommandResult(
             command_id=request.command_id,

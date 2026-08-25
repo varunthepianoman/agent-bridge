@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .config import ExclusionRules, NodeAgentSettings
+from .hub import HubTransportError
 from .runner import CommandResult, NodeCommand
+
+LOGGER = logging.getLogger(__name__)
+_MAX_RETRY_DELAY_SECONDS = 60
 
 
 class DiscoveredItem(Protocol):
@@ -77,8 +82,10 @@ class NodeAgent:
         self.hub = hub
         self.provider = provider
         self.runner = runner
+        self._pending_results: list[CommandResult] = []
 
     async def run_once(self) -> NodeCycleResult:
+        self._report_pending_results()
         records: list[dict[str, Any]] = []
         discovered = excluded = 0
         rules = self.settings.exclusions
@@ -121,7 +128,8 @@ class NodeAgent:
                 heartbeat.cancel()
                 await asyncio.gather(heartbeat, return_exceptions=True)
             failed += result.status == "failed"
-            self.hub.report_result(self.settings.node_id, result)
+            self._pending_results.append(result)
+            self._report_pending_results()
         heartbeat_ttl = max(15, min(600, round(self.settings.interval_seconds * 3)))
         self.hub.heartbeat(
             {
@@ -134,22 +142,56 @@ class NodeAgent:
 
     async def _heartbeat_while_busy(self) -> None:
         ttl = max(15, min(600, round(self.settings.interval_seconds * 3)))
+        failures = 0
         while True:
-            await asyncio.to_thread(
-                self.hub.heartbeat,
-                {
-                    "node_id": self.settings.node_id,
-                    "ttl_seconds": ttl,
-                    "capabilities": ["catalog.collect", "native.resume", "native.open"],
-                    "metadata": {"busy": True},
-                },
-            )
-            await asyncio.sleep(self.settings.interval_seconds)
+            try:
+                await asyncio.to_thread(self._heartbeat, ttl, True)
+            except HubTransportError as error:
+                failures += 1
+                delay = self._retry_delay(failures)
+                LOGGER.warning("Busy heartbeat failed; retrying in %s seconds: %s", delay, error)
+            else:
+                failures = 0
+                delay = self.settings.interval_seconds
+            await asyncio.sleep(delay)
 
     async def serve(self) -> None:
+        failures = 0
         while True:
-            await self.run_once()
-            await asyncio.sleep(self.settings.interval_seconds)
+            try:
+                await self.run_once()
+            except HubTransportError as error:
+                failures += 1
+                delay = self._retry_delay(failures)
+                LOGGER.warning("Hub communication failed; retrying in %s seconds: %s", delay, error)
+                await asyncio.sleep(delay)
+            else:
+                failures = 0
+                await asyncio.sleep(self.settings.interval_seconds)
+
+    def _report_pending_results(self) -> None:
+        while self._pending_results:
+            result = self._pending_results[0]
+            self.hub.report_result(self.settings.node_id, result)
+            self._pending_results.pop(0)
+
+    def _heartbeat(self, ttl: int, busy: bool) -> None:
+        heartbeat: dict[str, Any] = {
+            "node_id": self.settings.node_id,
+            "ttl_seconds": ttl,
+            "capabilities": ["catalog.collect", "native.resume", "native.open"],
+        }
+        if busy:
+            heartbeat["metadata"] = {"busy": True}
+        self.hub.heartbeat(heartbeat)
+
+    def _retry_delay(self, failures: int) -> float:
+        return float(
+            min(
+                _MAX_RETRY_DELAY_SECONDS,
+                max(self.settings.interval_seconds, 2 ** min(failures - 1, 6)),
+            )
+        )
 
 
 def _serialize(item: DiscoveredItem, rules: ExclusionRules, environment_id: str) -> dict[str, Any]:
