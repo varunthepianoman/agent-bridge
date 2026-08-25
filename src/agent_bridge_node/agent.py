@@ -147,6 +147,7 @@ class NodeAgent:
                 "node_id": self.settings.node_id,
                 "ttl_seconds": heartbeat_ttl,
                 "capabilities": ["catalog.collect", "native.resume", "native.open"],
+                "metadata": {"busy": False},
             }
         )
         return NodeCycleResult(discovered, len(records), excluded, len(commands), failed)

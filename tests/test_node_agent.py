@@ -128,6 +128,7 @@ async def test_cycle_filters_locally_syncs_heartbeat_and_reports_commands() -> N
     assert hub.environments[0]["environment_id"] == "wsl-a"
     assert hub.results[0].command_id == "cmd-1"
     assert hub.beats[0]["node_id"] == "node-a"
+    assert hub.beats[-1]["metadata"] == {"busy": False}
 
 
 async def test_daemon_recovers_after_transient_hub_synchronization_failure(monkeypatch) -> None:
