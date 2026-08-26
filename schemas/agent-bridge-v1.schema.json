@@ -116,8 +116,9 @@
           "type": "number"
         },
         "strategy": {
-          "default": "queue",
+          "default": "mailbox",
           "enum": [
+            "mailbox",
             "queue",
             "steer-or-queue"
           ],

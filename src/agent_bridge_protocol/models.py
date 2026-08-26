@@ -9,7 +9,7 @@ from typing import Any, Final, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SCHEMA_VERSION: Final = "agent-bridge/v1"
-DeliveryStrategy = Literal["queue", "steer-or-queue"]
+DeliveryStrategy = Literal["mailbox", "queue", "steer-or-queue"]
 
 
 def utc_now() -> datetime:
@@ -61,7 +61,7 @@ class ArtifactRef(ContractModel):
 
 
 class DeliveryPolicy(ContractModel):
-    strategy: DeliveryStrategy = "queue"
+    strategy: DeliveryStrategy = "mailbox"
     expires_at: datetime | None = None
     max_attempts: int = Field(default=3, ge=1, le=100)
     retry_backoff_seconds: float = Field(default=5.0, ge=0)
