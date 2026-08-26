@@ -23,6 +23,7 @@ class NodeCommand(BaseModel):
         "open_native_url",
         "deliver_turn",
         "start_conversation",
+        "read_conversation",
     ]
     environment_id: str = Field(min_length=1)
     conversation_id: str | None = None
@@ -66,6 +67,8 @@ class CodexRuntime(Protocol):
     async def start(self, request: NodeCommand) -> CommandResult: ...
 
     async def deliver(self, request: NodeCommand) -> CommandResult: ...
+
+    async def read(self, request: NodeCommand) -> CommandResult: ...
 
 
 class ClaudeRuntime(Protocol):
@@ -305,7 +308,14 @@ class RemoteCommandRunner:
         if request.provider == "codex" and request.kind in {
             "start_conversation",
             "deliver_turn",
+            "read_conversation",
         }:
+            if request.kind == "read_conversation":
+                if not request.provider_thread_id:
+                    return NativeCommandRunner._failure(
+                        request, "Codex conversation read is missing a thread"
+                    )
+                return await self.codex.read(request)
             validation = self._validate_codex(request)
             if validation is not None:
                 return validation

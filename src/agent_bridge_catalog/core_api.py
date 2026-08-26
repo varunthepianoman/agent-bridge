@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from typing import Any, Literal, cast
 from uuid import uuid4
 
@@ -279,6 +281,66 @@ def get_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
     return _conversation_dict(
         request, _conversation(request, conversation_id), include_transcript=True
     )
+
+
+@router.post("/conversations/{conversation_id}/refresh")
+async def refresh_conversation(
+    conversation_id: str,
+    request: Request,
+    response: Response,
+    wait_seconds: float = Query(default=0, ge=0, le=60),
+) -> dict[str, Any]:
+    """Request a read-only projection refresh from the conversation's owning node."""
+
+    row = _conversation(request, conversation_id)
+    if row.provider.casefold() != "codex":
+        raise HTTPException(status_code=409, detail="targeted refresh currently supports Codex")
+    if row.node_id == request.app.state.settings.node_id:
+        raise HTTPException(
+            status_code=409,
+            detail="targeted refresh is only required for remote conversations",
+        )
+    try:
+        command = request.app.state.node_store.queue_command(
+            node_id=row.node_id,
+            kind="read_conversation",
+            conversation_id=row.conversation_id,
+            payload={
+                "provider": row.provider,
+                "provider_thread_id": row.provider_thread_id,
+                "environment_id": row.environment_id,
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    deadline = time.monotonic() + wait_seconds
+    current = command
+    while wait_seconds > 0 and current["status"] in {"queued", "claimed"}:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(0.1, remaining))
+        refreshed = request.app.state.node_store.get_command(command["command_id"])
+        if refreshed is None:
+            raise HTTPException(status_code=404, detail="refresh command not found")
+        current = refreshed
+
+    if current["status"] == "succeeded":
+        refreshed_row = _conversation(request, conversation_id)
+        return {
+            "status": "succeeded",
+            "command_id": command["command_id"],
+            "conversation": _conversation_dict(
+                request, refreshed_row, include_transcript=True
+            ),
+        }
+    response.status_code = status.HTTP_202_ACCEPTED
+    return {
+        "status": current["status"],
+        "command_id": command["command_id"],
+        "detail": (current.get("result") or {}).get("detail"),
+    }
 
 
 @router.patch("/conversations/{conversation_id}")

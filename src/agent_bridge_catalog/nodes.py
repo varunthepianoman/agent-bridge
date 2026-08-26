@@ -255,6 +255,10 @@ class NodeStore:
     ) -> dict[str, Any]:
         if not self.is_reachable(node_id):
             raise ValueError("node is unavailable")
+        if kind == "read_conversation" and not self.has_capability(
+            node_id, "conversation.read"
+        ):
+            raise ValueError("node does not support read-only conversation refresh")
         now = datetime.now(UTC)
         row = NodeCommandRow(
             command_id=f"cmd-{secrets.token_hex(12)}",
@@ -271,6 +275,14 @@ class NodeStore:
             session.add(row)
             session.commit()
             return self._command_dict(row)
+
+    def has_capability(self, node_id: str, capability: str) -> bool:
+        with self.database.session() as session:
+            row = session.get(NodeRow, node_id)
+            if row is None:
+                return False
+            capabilities = json.loads(row.capabilities_json)
+            return isinstance(capabilities, list) and capability in capabilities
 
     def claim_command(
         self,

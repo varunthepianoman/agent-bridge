@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Annotated, Any
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Request
@@ -131,6 +132,14 @@ def command_result(
     store = _store(request)
     _authenticate(store, payload.node_id, authorization)
     try:
+        queued = store.get_command(command_id)
+        if queued is None or queued.get("node_id") != payload.node_id:
+            raise LookupError("command not found")
+        if (
+            queued.get("kind") == "read_conversation"
+            and payload.status == "succeeded"
+        ):
+            _validate_read_result(queued, payload.output)
         result = store.complete_command(
             node_id=payload.node_id,
             command_id=command_id,
@@ -139,6 +148,8 @@ def command_result(
             result={"detail": payload.detail, "output": payload.output},
         )
         already_completed = bool(result.pop("_already_completed", False))
+        if result.get("kind") == "read_conversation" and payload.status == "succeeded":
+            _upsert_read_result(request, result, payload.output)
         if already_completed:
             return result
         message_id = payload.output.get("message_id")
@@ -205,6 +216,76 @@ def command_result(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+_READ_PROJECTION_FIELDS = {
+    "provider",
+    "provider_thread_id",
+    "title",
+    "preview",
+    "cwd",
+    "source_kind",
+    "model_provider",
+    "created_at",
+    "updated_at",
+    "status",
+    "parent_thread_id",
+    "git_sha",
+    "git_branch",
+    "git_origin_url",
+    "is_pinned",
+    "is_ephemeral",
+    "transcript_text",
+}
+
+
+def _validate_read_result(command: Mapping[str, Any], output: Mapping[str, Any]) -> None:
+    conversation = output.get("conversation")
+    if not isinstance(conversation, Mapping):
+        raise ValueError("conversation read result has no projection")
+    expected = {
+        "node_id": command.get("node_id"),
+        "environment_id": command.get("environment_id"),
+        "provider": command.get("provider"),
+        "provider_thread_id": command.get("provider_thread_id"),
+    }
+    actual = {
+        "node_id": output.get("node_id"),
+        "environment_id": output.get("environment_id"),
+        "provider": output.get("provider"),
+        "provider_thread_id": output.get("provider_thread_id"),
+    }
+    if expected != actual:
+        raise ValueError("conversation read result identity does not match its command")
+    if any(conversation.get(key) != actual[key] for key in ("provider", "provider_thread_id")):
+        raise ValueError("conversation read projection identity does not match its command")
+    expected_id = stable_conversation_id(
+        str(expected["provider"]),
+        str(expected["provider_thread_id"]),
+        str(expected["node_id"]),
+        str(expected["environment_id"]),
+    )
+    if command.get("conversation_id") != expected_id:
+        raise ValueError("conversation read command identity is invalid")
+
+
+def _upsert_read_result(
+    request: Request,
+    command: Mapping[str, Any],
+    output: Mapping[str, Any],
+) -> None:
+    projection = output["conversation"]
+    assert isinstance(projection, Mapping)
+    sanitized = {
+        key: value for key, value in projection.items() if key in _READ_PROJECTION_FIELDS
+    }
+    request.app.state.repository.upsert_discovered(
+        sanitized,
+        node_id=str(command["node_id"]),
+        environment_id=str(command["environment_id"]),
+        transcript_included=True,
+    )
+    request.app.state.repository.resolve_parents()
 
 
 @router.post("/node/turn-events")

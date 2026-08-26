@@ -278,6 +278,55 @@ def test_claim_skips_busy_conversations_and_full_provider_capacity(tmp_path: Pat
     assert claimed_first["command_id"] == first["command_id"]
 
 
+def test_read_command_bypasses_provider_capacity_and_active_conversation(
+    tmp_path: Path,
+) -> None:
+    client, store, _repository = _client(tmp_path)
+    credential = "a sufficiently long node credential"
+    client.post(
+        "/api/v1/nodes",
+        json={
+            "node_id": "node-linux",
+            "display_name": "Linux",
+            "platform": "linux",
+            "credential": credential,
+            "capabilities": ["conversation.read"],
+        },
+    )
+    headers = {"Authorization": f"Bearer {credential}"}
+    client.post(
+        "/api/v1/node/heartbeat",
+        json={
+            "node_id": "node-linux",
+            "ttl_seconds": 30,
+            "capabilities": ["conversation.read"],
+        },
+        headers=headers,
+    )
+    queued = store.queue_command(
+        node_id="node-linux",
+        kind="read_conversation",
+        payload={
+            "provider": "codex",
+            "provider_thread_id": "thread-a",
+            "environment_id": "host",
+        },
+    )
+
+    command = client.post(
+        "/api/v1/node/commands/claim",
+        json={
+            "node_id": "node-linux",
+            "provider_capacity_available": False,
+            "active_provider_conversations": ["codex:thread-a"],
+        },
+        headers=headers,
+    ).json()["command"]
+
+    assert command["command_id"] == queued["command_id"]
+    assert command["kind"] == "read_conversation"
+
+
 def test_claimed_command_is_not_executed_again_after_node_restart(tmp_path: Path) -> None:
     client, store, _repository = _client(tmp_path)
     credential = "a sufficiently long node credential"
@@ -556,3 +605,159 @@ def test_authoritative_resume_routes_to_owner_and_refuses_offline_fallback(
         )
         assert unavailable.status_code == 409
         assert "unavailable" in unavailable.json()["detail"]
+
+
+def test_refresh_rejects_old_node_without_read_capability(tmp_path: Path) -> None:
+    settings = Settings(
+        state_dir=tmp_path,
+        database_url=f"sqlite:///{tmp_path / 'refresh-old.db'}",
+        node_id="hub-local",
+        environment_id="host",
+    )
+    with TestClient(create_app(settings=settings)) as client:
+        credential = "remote credential that is sufficiently long"
+        client.post(
+            "/api/v1/nodes",
+            json={
+                "node_id": "old-node",
+                "display_name": "Old node",
+                "platform": "linux",
+                "credential": credential,
+            },
+        )
+        headers = {"Authorization": f"Bearer {credential}"}
+        synced = client.post(
+            "/api/v1/node/sync",
+            json={
+                "registration": {"node_id": "old-node"},
+                "environments": [{"environment_id": "host"}],
+                "conversations": [
+                    {
+                        "provider": "codex",
+                        "provider_thread_id": "thread-old",
+                        "environment_id": "host",
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert synced.status_code == 200
+        candidate = client.get("/api/v1/conversations/candidates").json()["items"][0]
+        conversation = client.post(
+            "/api/v1/conversations/import",
+            json={"conversation_ids": [candidate["conversation_id"]]},
+        ).json()["items"][0]
+
+        response = client.post(
+            f"/api/v1/conversations/{conversation['conversation_id']}/refresh"
+        )
+
+        assert response.status_code == 409
+        assert "does not support" in response.json()["detail"]
+
+
+def test_refresh_validates_identity_then_updates_sanitized_projection(tmp_path: Path) -> None:
+    settings = Settings(
+        state_dir=tmp_path,
+        database_url=f"sqlite:///{tmp_path / 'refresh.db'}",
+        node_id="hub-local",
+        environment_id="host",
+    )
+    with TestClient(create_app(settings=settings)) as client:
+        credential = "remote credential that is sufficiently long"
+        client.post(
+            "/api/v1/nodes",
+            json={
+                "node_id": "new-node",
+                "display_name": "New node",
+                "platform": "windows",
+                "credential": credential,
+                "capabilities": ["conversation.read"],
+            },
+        )
+        headers = {"Authorization": f"Bearer {credential}"}
+        synced = client.post(
+            "/api/v1/node/sync",
+            json={
+                "registration": {
+                    "node_id": "new-node",
+                    "capabilities": ["conversation.read"],
+                },
+                "environments": [{"environment_id": "windows-native"}],
+                "conversations": [
+                    {
+                        "provider": "codex",
+                        "provider_thread_id": "thread-live",
+                        "environment_id": "windows-native",
+                        "title": "Before refresh",
+                        "transcript_text": "user: old",
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert synced.status_code == 200
+        candidate = client.get("/api/v1/conversations/candidates").json()["items"][0]
+        conversation_id = candidate["conversation_id"]
+        client.post(
+            "/api/v1/conversations/import",
+            json={"conversation_ids": [conversation_id]},
+        )
+        queued = client.post(f"/api/v1/conversations/{conversation_id}/refresh")
+        assert queued.status_code == 202
+        command_id = queued.json()["command_id"]
+        command = client.post(
+            "/api/v1/node/commands/claim",
+            json={
+                "node_id": "new-node",
+                "provider_capacity_available": False,
+                "active_provider_conversations": [conversation_id],
+            },
+            headers=headers,
+        ).json()["command"]
+        assert command["command_id"] == command_id
+
+        base_output = {
+            "node_id": "new-node",
+            "environment_id": "windows-native",
+            "provider": "codex",
+            "provider_thread_id": "thread-live",
+            "conversation": {
+                "provider": "codex",
+                "provider_thread_id": "thread-live",
+                "title": "After refresh",
+                "status": "active",
+                "transcript_text": "user: status\nassistant: still running",
+                "tool_output": "must be discarded",
+                "reasoning": "must be discarded",
+            },
+        }
+        mismatch = client.post(
+            f"/api/v1/node/commands/{command_id}/result",
+            json={
+                "node_id": "new-node",
+                "claim_token": command["claim_token"],
+                "status": "succeeded",
+                "output": {**base_output, "provider_thread_id": "wrong-thread"},
+            },
+            headers=headers,
+        )
+        assert mismatch.status_code == 409
+        assert client.get(f"/api/v1/node/commands/{command_id}").json()["status"] == "claimed"
+
+        completed = client.post(
+            f"/api/v1/node/commands/{command_id}/result",
+            json={
+                "node_id": "new-node",
+                "claim_token": command["claim_token"],
+                "status": "succeeded",
+                "output": base_output,
+            },
+            headers=headers,
+        )
+        assert completed.status_code == 200
+        refreshed = client.get(f"/api/v1/conversations/{conversation_id}").json()
+        assert refreshed["title"] == "After refresh"
+        assert refreshed["status"] == "active"
+        assert refreshed["transcript_text"] == "user: status\nassistant: still running"
+        assert "must be discarded" not in refreshed["raw_metadata"]

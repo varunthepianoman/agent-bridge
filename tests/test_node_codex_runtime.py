@@ -20,6 +20,8 @@ class FakeClient:
         self.unsubscribed: list[str] = []
         self.resume_error: AppServerError | None = None
         self.started: list[tuple[str, str, str | None, str | None]] = []
+        self.resumed: list[str] = []
+        self.reads: list[tuple[str, bool]] = []
         self.is_ready = True
         self.start_error: Exception | None = None
 
@@ -35,9 +37,31 @@ class FakeClient:
     async def resume_thread(
         self, thread_id: str, *, cwd: str | None = None
     ) -> Mapping[str, Any]:
+        self.resumed.append(thread_id)
         if self.resume_error is not None:
             raise self.resume_error
         return {"id": thread_id, "cwd": cwd}
+
+    async def read_thread(
+        self, thread_id: str, *, include_turns: bool = False
+    ) -> Mapping[str, Any]:
+        self.reads.append((thread_id, include_turns))
+        return {
+            "id": thread_id,
+            "name": "Live task",
+            "cwd": "/workspace",
+            "status": {"type": "active"},
+            "turns": [
+                {
+                    "items": [
+                        {"type": "userMessage", "text": "Check progress"},
+                        {"type": "reasoning", "text": "PRIVATE_REASONING"},
+                        {"type": "commandExecution", "output": "SECRET_TOOL_OUTPUT"},
+                        {"type": "agentMessage", "text": "Still running."},
+                    ]
+                }
+            ],
+        }
 
     async def start_turn(
         self,
@@ -155,6 +179,29 @@ async def test_active_writer_is_blocked_without_exec_fallback(tmp_path: Path) ->
     assert result.status == "blocked"
     assert client.started == []
     assert client.unsubscribed == []
+
+
+async def test_read_uses_only_thread_read_and_filters_non_message_items(tmp_path: Path) -> None:
+    client = FakeClient()
+    runtime = RemoteCodexRuntime(
+        cast(AppServerClient, client), node_id="node", event_sink=lambda _: None
+    )
+    request = command(tmp_path, kind="deliver_turn").model_copy(
+        update={"kind": "read_conversation", "prompt": None, "workspace": None}
+    )
+
+    result = await runtime.read(request)
+
+    assert result.status == "succeeded"
+    assert client.reads == [("thread-existing", True)]
+    assert client.resumed == []
+    assert client.started == []
+    assert client.unsubscribed == []
+    assert result.output["conversation"]["transcript_text"] == (
+        "user: Check progress\nassistant: Still running."
+    )
+    assert "PRIVATE_REASONING" not in str(result.output)
+    assert "SECRET_TOOL_OUTPUT" not in str(result.output)
 
 
 async def test_app_server_crash_fails_waiter_without_replaying_turn(tmp_path: Path) -> None:

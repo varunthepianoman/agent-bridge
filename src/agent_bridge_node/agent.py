@@ -14,6 +14,12 @@ from .runner import CommandResult, NodeCommand, NodeTurnEvent
 
 LOGGER = logging.getLogger(__name__)
 _MAX_RETRY_DELAY_SECONDS = 60
+NODE_CAPABILITIES = [
+    "catalog.collect",
+    "conversation.read",
+    "native.open",
+    "native.resume",
+]
 
 
 class DiscoveredItem(Protocol):
@@ -126,7 +132,7 @@ class NodeAgent:
             "node_id": self.settings.node_id,
             "display_name": self.settings.node_name,
             "platform": self.settings.environment_kind,
-            "capabilities": ["catalog.collect", "native.resume", "native.open"],
+            "capabilities": NODE_CAPABILITIES,
         }
         environment = {
             "environment_id": self.settings.environment_id,
@@ -165,7 +171,7 @@ class NodeAgent:
             {
                 "node_id": self.settings.node_id,
                 "ttl_seconds": heartbeat_ttl,
-                "capabilities": ["catalog.collect", "native.resume", "native.open"],
+                "capabilities": NODE_CAPABILITIES,
                 "metadata": self._provider_status(),
             }
         )
@@ -286,7 +292,7 @@ class NodeAgent:
                 heartbeat = {
                     "node_id": self.settings.node_id,
                     "ttl_seconds": ttl,
-                    "capabilities": ["catalog.collect", "native.resume", "native.open"],
+                    "capabilities": NODE_CAPABILITIES,
                     "metadata": self._provider_status(),
                 }
                 await asyncio.to_thread(self.hub.heartbeat, heartbeat)

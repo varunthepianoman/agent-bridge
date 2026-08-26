@@ -32,6 +32,16 @@ def get_conversation(conversation_id: str) -> Any:
 
 
 @mcp.tool()
+def refresh_conversation(conversation_id: str, wait_seconds: float = 10) -> Any:
+    """Safely refresh a remote Codex transcript using read-only thread/read."""
+    return _request(
+        "POST",
+        f"/conversations/{conversation_id}/refresh",
+        params={"wait_seconds": wait_seconds},
+    )
+
+
+@mcp.tool()
 def send_message(
     body: str,
     target_conversation_id: str | None = None,

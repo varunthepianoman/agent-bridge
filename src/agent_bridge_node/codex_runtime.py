@@ -11,6 +11,7 @@ from agent_bridge_providers.codex import (
     AppServerClient,
     AppServerClosedError,
     AppServerError,
+    CodexCatalogAdapter,
 )
 
 from .runner import CommandResult, NodeCommand, NodeTurnEvent
@@ -122,6 +123,50 @@ class RemoteCodexRuntime:
         finally:
             if owns_thread:
                 await self._release(request.provider_thread_id)
+
+    async def read(self, request: NodeCommand) -> CommandResult:
+        """Read a stored thread projection without acquiring its provider writer."""
+
+        assert request.provider_thread_id is not None
+        try:
+            thread = await self.client.read_thread(
+                request.provider_thread_id,
+                include_turns=True,
+            )
+            conversation = CodexCatalogAdapter.map_thread(thread)
+        except Exception as error:
+            return self._failure(request, error)
+        return CommandResult(
+            command_id=request.command_id,
+            claim_token=request.claim_token,
+            status="succeeded",
+            detail="Codex conversation read without acquiring its writer",
+            output={
+                "node_id": self.node_id,
+                "environment_id": request.environment_id,
+                "provider": conversation.provider,
+                "provider_thread_id": conversation.provider_thread_id,
+                "conversation": {
+                    "provider": conversation.provider,
+                    "provider_thread_id": conversation.provider_thread_id,
+                    "title": conversation.title,
+                    "preview": conversation.preview,
+                    "cwd": conversation.cwd,
+                    "source_kind": conversation.source_kind,
+                    "model_provider": conversation.model_provider,
+                    "created_at": conversation.created_at,
+                    "updated_at": conversation.updated_at,
+                    "status": conversation.status,
+                    "parent_thread_id": conversation.parent_thread_id,
+                    "git_sha": conversation.git_sha,
+                    "git_branch": conversation.git_branch,
+                    "git_origin_url": conversation.git_origin_url,
+                    "is_pinned": conversation.is_pinned,
+                    "is_ephemeral": conversation.is_ephemeral,
+                    "transcript_text": conversation.transcript_text,
+                },
+            },
+        )
 
     async def _observe_initial_turn(
         self,
