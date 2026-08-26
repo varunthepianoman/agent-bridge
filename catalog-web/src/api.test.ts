@@ -53,7 +53,7 @@ describe("conversation core API", () => {
 
     await mailbox("chat/1", "pending");
     await stopMailboxListener("chat/1");
-    await completeMailboxMessage("mail/1", { outcome: "blocked", detail: "Need input" });
+    await completeMailboxMessage("chat/1", "mail/1", { outcome: "blocked", detail: "Need input" });
     await refreshConversation("chat/1", 12);
     await sendProviderTurn("chat/1", { prompt: "Run checks", effort: "high" });
 
@@ -61,13 +61,14 @@ describe("conversation core API", () => {
       "/api/v1/mailbox/chat%2F1?state=pending",
       "/api/v1/mailbox/chat%2F1/stop-listener",
       "/api/v1/messages/mail%2F1/complete",
-      "/api/v1/conversations/chat%2F1/refresh",
+      "/api/v1/conversations/chat%2F1/refresh?wait_seconds=12",
       "/api/v1/conversations/chat%2F1/turns",
     ]);
     expect(JSON.parse(fetch.mock.calls[2][1].body)).toEqual({
+      conversation_id: "chat/1",
       outcome: "blocked",
       detail: "Need input",
     });
-    expect(JSON.parse(fetch.mock.calls[3][1].body)).toEqual({ wait_seconds: 12 });
+    expect(fetch.mock.calls[3][1].body).toBeUndefined();
   });
 });

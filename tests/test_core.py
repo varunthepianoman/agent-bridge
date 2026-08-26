@@ -207,15 +207,14 @@ def test_messages_rooms_attention_and_nats_diagnostics(tmp_path: Path) -> None:
             json={
                 "body": "Check the server side too",
                 "target_conversation_id": conversation_id,
-                "delivery_strategy": "steer-or-queue",
             },
         )
         assert message.status_code == 201
         assert message.json()["state"] == "published"
-        assert message.json()["delivery_strategy"] == "steer-or-queue"
+        assert message.json()["delivery_strategy"] == "mailbox"
         assert message.json()["delivery_route"] is None
         assert publisher.envelopes[0].destination.id == conversation_id
-        assert publisher.envelopes[0].delivery.strategy == "steer-or-queue"
+        assert publisher.envelopes[0].delivery.strategy == "mailbox"
 
         room = client.post("/api/v1/rooms", json={"name": "socket-debug"}).json()
         assert (
@@ -226,6 +225,69 @@ def test_messages_rooms_attention_and_nats_diagnostics(tmp_path: Path) -> None:
             == 200
         )
         assert client.get("/api/v1/nats/summary").json()["broker"]["status"] == "healthy"
+
+
+def test_foreground_mailbox_wait_completion_and_correlated_reply(tmp_path: Path) -> None:
+    publisher = Publisher()
+    app = create_app(settings=settings(tmp_path), provider=Provider(), bridge_publisher=publisher)
+    with TestClient(app) as client:
+        client.post("/api/v1/reconciliation")
+        candidates = client.get("/api/v1/conversations/candidates").json()["items"]
+        selected = client.post(
+            "/api/v1/conversations/import",
+            json={"conversation_ids": [item["conversation_id"] for item in candidates]},
+        ).json()["items"]
+        source, target = [item["conversation_id"] for item in selected]
+        sent = client.post(
+            "/api/v1/messages",
+            json={
+                "body": "Please inspect this",
+                "target_conversation_id": target,
+                "source_conversation_id": source,
+                "actor_kind": "agent",
+                "operation": "request",
+                "correlation_id": "correlation-api-test",
+            },
+        ).json()
+        app.state.mailbox.enqueue(sent["message_id"], [target])
+
+        received = client.post(
+            f"/api/v1/mailbox/{target}/wait",
+            json={"max_wait_seconds": 0, "batch_limit": 10},
+        )
+        assert received.status_code == 200
+        assert received.json()["status"] == "received"
+        assert received.json()["items"][0]["body"] == "Please inspect this"
+        assert received.json()["items"][0]["state"] == "received"
+
+        completed = client.post(
+            f"/api/v1/messages/{sent['message_id']}/complete",
+            json={
+                "conversation_id": target,
+                "outcome": "succeeded",
+                "detail": "verified",
+                "reply_body": "Inspection complete",
+            },
+        )
+        assert completed.status_code == 200
+        assert completed.json()["state"] == "succeeded"
+        reply = app.state.messages.get(completed.json()["reply_message_id"])
+        assert reply["target_conversation_id"] == source
+        assert reply["source_conversation_id"] == target
+        assert reply["correlation_id"] == "correlation-api-test"
+        assert reply["causation_id"] == sent["message_id"]
+
+        repeated = client.post(
+            f"/api/v1/messages/{sent['message_id']}/complete",
+            json={
+                "conversation_id": target,
+                "outcome": "succeeded",
+                "detail": "verified",
+                "reply_body": "Inspection complete",
+            },
+        )
+        assert repeated.status_code == 200
+        assert repeated.json()["reply_message_id"] == completed.json()["reply_message_id"]
 
 
 def test_removed_orchestration_apis_are_absent(tmp_path: Path) -> None:

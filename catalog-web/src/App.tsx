@@ -120,7 +120,7 @@ export function App() {
     onError: (error) => setOpenFeedback(error instanceof Error ? error.message : "Could not stop listener."),
   });
   const requeue = useMutation({
-    mutationFn: requeueMailboxMessage,
+    mutationFn: (messageId: string) => requeueMailboxMessage(selected!, messageId),
     onSuccess: async () => {
       await Promise.all([
         cache.invalidateQueries({ queryKey: ["mailbox", selected] }),

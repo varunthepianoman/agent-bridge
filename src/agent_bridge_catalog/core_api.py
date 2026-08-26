@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from typing import Any, Literal, cast
@@ -11,7 +12,14 @@ from uuid import uuid4
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from .core import AttentionStore, CollectionStore, MessageStore, NatsEventStore, RoomStore
+from .core import (
+    AttentionStore,
+    CollectionStore,
+    MailboxStore,
+    MessageStore,
+    NatsEventStore,
+    RoomStore,
+)
 from .repository import CatalogRepository
 
 router = APIRouter(prefix="/api/v1")
@@ -50,6 +58,10 @@ class TurnCreate(Input):
     effort: Literal["low", "medium", "high", "xhigh", "max", "ultra"] | None = None
 
 
+class SteerCreate(Input):
+    prompt: str = Field(min_length=1)
+
+
 class CatalogSettingsPatch(Input):
     auto_add_new_chats: bool
 
@@ -78,7 +90,7 @@ class RoomUpdate(Input):
 
 
 class RoomMembership(Input):
-    delivery_mode: str = Field(pattern="^(wake|notify|digest)$")
+    delivery_mode: str = Field(pattern="^(mailbox|notify|digest)$")
 
 
 class MessageCreate(Input):
@@ -93,9 +105,23 @@ class MessageCreate(Input):
     )
     correlation_id: str | None = None
     causation_id: str | None = None
-    delivery_strategy: str = Field(
-        default="queue", pattern="^(queue|steer-or-queue)$"
-    )
+
+
+class MailboxWait(Input):
+    max_wait_seconds: float = Field(default=3600, ge=0, le=3600)
+    batch_limit: int = Field(default=50, ge=1, le=50)
+
+
+class MessageComplete(Input):
+    conversation_id: str = Field(min_length=1)
+    outcome: Literal["succeeded", "blocked", "failed"]
+    detail: str | None = Field(default=None, max_length=20_000)
+    reply_body: str | None = Field(default=None, min_length=1, max_length=200_000)
+
+
+class MessageRequeue(Input):
+    conversation_id: str = Field(min_length=1)
+    detail: str | None = Field(default=None, max_length=20_000)
 
 
 def _repository(request: Request) -> CatalogRepository:
@@ -112,6 +138,10 @@ def _rooms(request: Request) -> RoomStore:
 
 def _messages(request: Request) -> MessageStore:
     return request.app.state.messages  # type: ignore[no-any-return]
+
+
+def _mailbox(request: Request) -> MailboxStore:
+    return request.app.state.mailbox  # type: ignore[no-any-return]
 
 
 def _attention(request: Request) -> AttentionStore:
@@ -131,6 +161,24 @@ def _conversation(request: Request, conversation_id: str) -> Any:
 
 def _conversation_dict(request: Request, row: Any, **kwargs: Any) -> dict[str, Any]:
     return cast(dict[str, Any], request.app.state.conversation_dict(row, **kwargs))
+
+
+def _message_dict(request: Request, item: dict[str, Any]) -> dict[str, Any]:
+    result = dict(item)
+    deliveries = _mailbox(request).list_message_deliveries(item["message_id"])
+    result["processing_deliveries"] = deliveries
+    if len(deliveries) == 1:
+        for key in (
+            "processing_state",
+            "processing_detail",
+            "outcome_detail",
+            "received_at",
+            "completed_at",
+            "outcome_at",
+            "reply_message_id",
+        ):
+            result[key] = deliveries[0].get(key)
+    return result
 
 
 @router.get("/health")
@@ -422,6 +470,38 @@ async def create_turn(
     return {"status": "queued", "conversation_id": conversation_id}
 
 
+@router.post("/conversations/{conversation_id}/steer")
+async def steer_active_turn(
+    conversation_id: str, payload: SteerCreate, request: Request
+) -> dict[str, Any]:
+    """Explicitly steer a local active Codex turn, with no queued-turn fallback."""
+
+    row = _conversation(request, conversation_id)
+    if row.node_id != request.app.state.settings.node_id:
+        raise HTTPException(status_code=409, detail="remote active-turn steering is unsupported")
+    steer_id = f"steer-{uuid4().hex}"
+    try:
+        result = await request.app.state.runtime.deliver_active_turn(
+            provider=row.provider,
+            provider_thread_id=row.provider_thread_id,
+            cwd=row.cwd or ".",
+            prompt=payload.prompt,
+            message_id=steer_id,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if str(result.state) != "delivered":
+        raise HTTPException(
+            status_code=409,
+            detail={"state": str(result.state), "detail": result.detail},
+        )
+    return {
+        "status": "delivered",
+        "conversation_id": conversation_id,
+        "steer_id": steer_id,
+    }
+
+
 @router.post("/conversations/{conversation_id}/open")
 def open_conversation(
     conversation_id: str,
@@ -587,13 +667,16 @@ def remove_room_member(room_id: str, conversation_id: str, request: Request) -> 
 @router.get("/messages")
 def list_messages(request: Request, correlation_id: str | None = None) -> dict[str, Any]:
     items = _messages(request).list(correlation_id=correlation_id)
-    return {"items": items, "total": len(items)}
+    return {"items": [_message_dict(request, item) for item in items], "total": len(items)}
 
 
 @router.post("/messages", status_code=201)
 async def send_message(payload: MessageCreate, request: Request) -> dict[str, Any]:
     try:
-        return await _messages(request).send(**payload.model_dump())
+        return await _messages(request).send(
+            **payload.model_dump(),
+            delivery_strategy="mailbox",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -603,7 +686,159 @@ def get_message(message_id: str, request: Request) -> dict[str, Any]:
     item = _messages(request).get(message_id)
     if item is None:
         raise HTTPException(status_code=404, detail="message not found")
-    return item
+    return _message_dict(request, item)
+
+
+@router.get("/mailbox/{conversation_id}")
+def list_inbox(
+    conversation_id: str,
+    request: Request,
+    processing_state: Literal["pending", "received", "succeeded", "blocked", "failed"]
+    | None = Query(default=None, alias="state"),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> dict[str, Any]:
+    _conversation(request, conversation_id)
+    items = _mailbox(request).list_inbox(
+        conversation_id, state=processing_state, limit=limit
+    )
+    return {
+        "items": items,
+        "total": len(items),
+        "listener": _mailbox(request).get_listener(conversation_id),
+    }
+
+
+@router.post("/mailbox/{conversation_id}/wait")
+async def wait_mailbox(
+    conversation_id: str, payload: MailboxWait, request: Request
+) -> dict[str, Any]:
+    """Wait in the caller's foreground turn and atomically receive pending mail."""
+
+    _conversation(request, conversation_id)
+    listener_id = f"listener-{uuid4().hex}"
+    lease_seconds = 15.0
+    try:
+        listener = await asyncio.to_thread(
+            _mailbox(request).acquire_listener,
+            conversation_id,
+            listener_id=listener_id,
+            lease_seconds=lease_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    fencing_token = int(listener["fencing_token"])
+    deadline = time.monotonic() + payload.max_wait_seconds
+    try:
+        while True:
+            current = await asyncio.to_thread(_mailbox(request).get_listener, conversation_id)
+            if current is None or current.get("stop_requested_at") is not None:
+                return {"status": "stopped", "items": [], "listener": current}
+            try:
+                items = await asyncio.to_thread(
+                    _mailbox(request).receive_pending,
+                    conversation_id,
+                    listener_id=listener_id,
+                    fencing_token=fencing_token,
+                    limit=payload.batch_limit,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if items:
+                return {"status": "received", "items": items, "listener": current}
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"status": "timeout", "items": [], "listener": current}
+            await asyncio.sleep(min(0.5, remaining))
+            try:
+                listener = await asyncio.to_thread(
+                    _mailbox(request).heartbeat_listener,
+                    conversation_id,
+                    listener_id=listener_id,
+                    fencing_token=fencing_token,
+                    lease_seconds=lease_seconds,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        await asyncio.to_thread(
+            _mailbox(request).release_listener,
+            conversation_id,
+            listener_id=listener_id,
+            fencing_token=fencing_token,
+        )
+
+
+@router.post("/mailbox/{conversation_id}/stop-listener")
+def stop_listener(conversation_id: str, request: Request) -> dict[str, Any]:
+    _conversation(request, conversation_id)
+    listener = _mailbox(request).request_listener_stop(conversation_id)
+    return {"status": "stop_requested" if listener else "idle", "listener": listener}
+
+
+@router.post("/messages/{message_id}/complete")
+async def complete_message(
+    message_id: str, payload: MessageComplete, request: Request
+) -> dict[str, Any]:
+    _conversation(request, payload.conversation_id)
+    delivery = _mailbox(request).get_delivery(message_id, payload.conversation_id)
+    if delivery is None:
+        raise HTTPException(status_code=404, detail="mailbox delivery not found")
+    if delivery.get("listener_id") is None or delivery.get("fencing_token") is None:
+        raise HTTPException(status_code=409, detail="message has not been received")
+
+    reply_message_id: str | None = delivery.get("reply_message_id")
+    if payload.reply_body is not None:
+        source_id = delivery.get("source_conversation_id")
+        if not source_id:
+            raise HTTPException(status_code=409, detail="message has no conversation reply target")
+        digest = hashlib.sha256(
+            f"{message_id}\0{payload.conversation_id}".encode()
+        ).hexdigest()[:32]
+        reply_message_id = f"message-reply-{digest}"
+        try:
+            await _messages(request).send(
+                message_id=reply_message_id,
+                body=payload.reply_body,
+                target_conversation_id=str(source_id),
+                room_id=None,
+                source_conversation_id=payload.conversation_id,
+                actor_kind="agent",
+                operation="reply",
+                correlation_id=str(delivery["correlation_id"]),
+                causation_id=message_id,
+                delivery_strategy="mailbox",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        return _mailbox(request).complete(
+            message_id,
+            payload.conversation_id,
+            outcome=payload.outcome,
+            detail=payload.detail,
+            listener_id=str(delivery["listener_id"]),
+            fencing_token=int(delivery["fencing_token"]),
+            reply_message_id=reply_message_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/messages/{message_id}/requeue")
+def requeue_message(
+    message_id: str, payload: MessageRequeue, request: Request
+) -> dict[str, Any]:
+    _conversation(request, payload.conversation_id)
+    try:
+        return _mailbox(request).requeue(
+            message_id, payload.conversation_id, detail=payload.detail
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/correlations/{correlation_id}")

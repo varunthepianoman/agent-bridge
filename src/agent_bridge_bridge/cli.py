@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     refresh = commands.add_parser("refresh", help="refresh a remote Codex transcript safely")
     refresh.add_argument("conversation_id")
-    refresh.add_argument("--wait", type=float, default=10.0)
+    refresh.add_argument("--wait-seconds", type=float, default=10.0)
 
     rename = commands.add_parser("rename", help="set a Bridge alias")
     rename.add_argument("conversation_id")
@@ -60,17 +60,46 @@ def build_parser() -> argparse.ArgumentParser:
     message.add_argument("--from-chat")
     message.add_argument("--operation", default="message")
     message.add_argument("--correlation-id")
-    message.add_argument(
-        "--delivery",
-        dest="delivery_strategy",
-        choices=("queue", "steer-or-queue"),
-        default="queue",
+
+    inbox = commands.add_parser("inbox", help="list durable mail for one chat")
+    inbox.add_argument("conversation_id")
+    inbox.add_argument(
+        "--state", choices=("pending", "received", "succeeded", "blocked", "failed")
     )
+    inbox.add_argument("--limit", type=int, default=200)
+
+    wait = commands.add_parser("wait", help="wait in the foreground for chat mail")
+    wait.add_argument("conversation_id")
+    wait.add_argument("--max-wait-seconds", type=float, default=3600)
+    wait.add_argument("--batch-limit", type=int, default=50)
+
+    complete = commands.add_parser("complete", help="record a mailbox message outcome")
+    complete.add_argument("conversation_id")
+    complete.add_argument("message_id")
+    complete.add_argument("--outcome", choices=("succeeded", "blocked", "failed"), required=True)
+    complete.add_argument("--detail")
+    complete.add_argument("--reply-body")
+
+    requeue = commands.add_parser("requeue", help="explicitly return mail to pending")
+    requeue.add_argument("conversation_id")
+    requeue.add_argument("message_id")
+    requeue.add_argument("--detail")
+
+    stop_listener = commands.add_parser(
+        "stop-listener", help="request cancellation of a chat mailbox listener"
+    )
+    stop_listener.add_argument("conversation_id")
 
     turn = commands.add_parser("turn", help="send a local user turn to a selected chat")
     turn.add_argument("conversation_id")
     turn.add_argument("prompt")
     turn.add_argument("--effort", choices=REASONING_EFFORTS)
+
+    steer = commands.add_parser(
+        "steer", help="explicitly steer a local active Codex turn without fallback"
+    )
+    steer.add_argument("conversation_id")
+    steer.add_argument("prompt")
 
     start = commands.add_parser("start", help="start a new provider conversation")
     start.add_argument("--provider", choices=("codex", "claude"), required=True)
@@ -147,7 +176,7 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
     if command == "refresh":
         return client.post(
             f"/conversations/{args.conversation_id}/refresh",
-            params={"wait_seconds": args.wait},
+            params={"wait_seconds": args.wait_seconds},
         )
     if command == "rename":
         return client.patch(f"/conversations/{args.conversation_id}", json={"alias": args.alias})
@@ -162,14 +191,52 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
                     "source_conversation_id": args.from_chat,
                     "operation": args.operation,
                     "correlation_id": args.correlation_id,
-                    "delivery_strategy": args.delivery_strategy,
                 }
             ),
         )
+    if command == "inbox":
+        return client.get(
+            f"/mailbox/{args.conversation_id}",
+            params=_without_none({"state": args.state, "limit": args.limit}),
+        )
+    if command == "wait":
+        return client.post(
+            f"/mailbox/{args.conversation_id}/wait",
+            json={
+                "max_wait_seconds": args.max_wait_seconds,
+                "batch_limit": args.batch_limit,
+            },
+            timeout=max(30, args.max_wait_seconds + 10),
+        )
+    if command == "complete":
+        return client.post(
+            f"/messages/{args.message_id}/complete",
+            json=_without_none(
+                {
+                    "conversation_id": args.conversation_id,
+                    "outcome": args.outcome,
+                    "detail": args.detail,
+                    "reply_body": args.reply_body,
+                }
+            ),
+        )
+    if command == "requeue":
+        return client.post(
+            f"/messages/{args.message_id}/requeue",
+            json=_without_none(
+                {"conversation_id": args.conversation_id, "detail": args.detail}
+            ),
+        )
+    if command == "stop-listener":
+        return client.post(f"/mailbox/{args.conversation_id}/stop-listener")
     if command == "turn":
         return client.post(
             f"/conversations/{args.conversation_id}/turns",
             json=_without_none({"prompt": args.prompt, "effort": args.effort}),
+        )
+    if command == "steer":
+        return client.post(
+            f"/conversations/{args.conversation_id}/steer", json={"prompt": args.prompt}
         )
     if command == "start":
         return client.post(

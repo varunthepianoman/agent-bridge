@@ -141,8 +141,6 @@ def test_cli_passes_launch_settings_and_only_effort_on_later_turns() -> None:
                 "message",
                 "--chat",
                 "conversation-1",
-                "--delivery",
-                "steer-or-queue",
                 "Bridge update",
             ],
             transport=transport,
@@ -170,7 +168,6 @@ def test_cli_passes_launch_settings_and_only_effort_on_later_turns() -> None:
         "body": "Bridge update",
         "target_conversation_id": "conversation-1",
         "operation": "message",
-        "delivery_strategy": "steer-or-queue",
     }
     assert json.loads(requests[2].content) == {"prompt": "Go deeper", "effort": "xhigh"}
 

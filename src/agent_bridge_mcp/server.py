@@ -11,9 +11,11 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("Agent Bridge")
 
 
-def _request(method: str, path: str, **kwargs: Any) -> Any:
+def _request(
+    method: str, path: str, *, timeout: float = 30, **kwargs: Any
+) -> Any:
     root = os.environ.get("AGENT_BRIDGE_API_URL", "http://127.0.0.1:58081/api/v1")
-    with httpx.Client(base_url=root.rstrip("/"), timeout=30) as client:
+    with httpx.Client(base_url=root.rstrip("/"), timeout=timeout) as client:
         response = client.request(method, path, **kwargs)
         response.raise_for_status()
         return response.json() if response.content else {"ok": True}
@@ -49,9 +51,8 @@ def send_message(
     source_conversation_id: str | None = None,
     operation: str = "message",
     correlation_id: str | None = None,
-    delivery_strategy: str = "queue",
 ) -> Any:
-    """Send a durable Bridge message to exactly one selected chat or room."""
+    """Put durable mail in exactly one selected chat or room inbox."""
     return _request(
         "POST",
         "/messages",
@@ -63,9 +64,74 @@ def send_message(
             "actor_kind": "agent",
             "operation": operation,
             "correlation_id": correlation_id,
-            "delivery_strategy": delivery_strategy,
         },
     )
+
+
+@mcp.tool()
+def list_inbox(
+    conversation_id: str, state: str | None = None, limit: int = 200
+) -> Any:
+    """List durable mail and processing state for exactly one selected conversation."""
+    return _request(
+        "GET",
+        f"/mailbox/{conversation_id}",
+        params={"state": state, "limit": limit},
+    )
+
+
+@mcp.tool()
+def wait_mailbox(
+    conversation_id: str,
+    max_wait_seconds: float = 3600,
+    batch_limit: int = 50,
+) -> Any:
+    """Wait in this foreground turn for mail, returning it only as structured tool data."""
+    return _request(
+        "POST",
+        f"/mailbox/{conversation_id}/wait",
+        timeout=max(30, max_wait_seconds + 10),
+        json={"max_wait_seconds": max_wait_seconds, "batch_limit": batch_limit},
+    )
+
+
+@mcp.tool()
+def complete_message(
+    conversation_id: str,
+    message_id: str,
+    outcome: str,
+    detail: str | None = None,
+    reply_body: str | None = None,
+) -> Any:
+    """Record a received message outcome, optionally sending one correlated mailbox reply."""
+    return _request(
+        "POST",
+        f"/messages/{message_id}/complete",
+        json={
+            "conversation_id": conversation_id,
+            "outcome": outcome,
+            "detail": detail,
+            "reply_body": reply_body,
+        },
+    )
+
+
+@mcp.tool()
+def requeue_message(
+    conversation_id: str, message_id: str, detail: str | None = None
+) -> Any:
+    """Explicitly return a received or terminal mailbox delivery to pending."""
+    return _request(
+        "POST",
+        f"/messages/{message_id}/requeue",
+        json={"conversation_id": conversation_id, "detail": detail},
+    )
+
+
+@mcp.tool()
+def stop_listener(conversation_id: str) -> Any:
+    """Request cancellation of the active foreground mailbox listener."""
+    return _request("POST", f"/mailbox/{conversation_id}/stop-listener")
 
 
 @mcp.tool()
@@ -103,6 +169,14 @@ def send_turn(conversation_id: str, prompt: str, effort: str | None = None) -> A
         "POST",
         f"/conversations/{conversation_id}/turns",
         json={"prompt": prompt, "effort": effort},
+    )
+
+
+@mcp.tool()
+def steer_active_turn(conversation_id: str, prompt: str) -> Any:
+    """Explicitly steer a local active Codex turn; never fall back to a new turn."""
+    return _request(
+        "POST", f"/conversations/{conversation_id}/steer", json={"prompt": prompt}
     )
 
 

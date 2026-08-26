@@ -32,6 +32,8 @@ class Settings:
     nats_client_name: str = "agent-bridge-catalog"
     discovery_interval_seconds: float = 10.0
     full_reconciliation_interval_seconds: float = 300.0
+    mailbox_outcome_grace_seconds: float = 300.0
+    mailbox_sweep_interval_seconds: float = 30.0
 
     def __post_init__(self) -> None:
         if self.broker_required and not self.nats_servers:
@@ -44,6 +46,10 @@ class Settings:
             raise ValueError("discovery interval must be positive")
         if self.full_reconciliation_interval_seconds <= 0:
             raise ValueError("full reconciliation interval must be positive")
+        if self.mailbox_outcome_grace_seconds <= 0:
+            raise ValueError("mailbox outcome grace must be positive")
+        if self.mailbox_sweep_interval_seconds <= 0:
+            raise ValueError("mailbox sweep interval must be positive")
         if self.nats_replicas < 1:
             raise ValueError("NATS replicas must be positive")
 
@@ -80,5 +86,11 @@ class Settings:
             ),
             full_reconciliation_interval_seconds=float(
                 os.environ.get("AGENT_BRIDGE_FULL_RECONCILIATION_SECONDS", "300")
+            ),
+            mailbox_outcome_grace_seconds=float(
+                os.environ.get("AGENT_BRIDGE_MAILBOX_OUTCOME_GRACE_SECONDS", "300")
+            ),
+            mailbox_sweep_interval_seconds=float(
+                os.environ.get("AGENT_BRIDGE_MAILBOX_SWEEP_INTERVAL_SECONDS", "30")
             ),
         )

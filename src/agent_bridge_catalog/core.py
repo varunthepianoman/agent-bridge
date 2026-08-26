@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
 from sqlalchemy import func, select, update
@@ -270,8 +270,8 @@ class RoomStore:
             return True
 
     def set_member(self, room_id: str, conversation_id: str, *, mode: str | None) -> bool:
-        if mode is not None and mode not in {"wake", "notify", "digest"}:
-            raise ValueError("room delivery mode must be wake, notify, or digest")
+        if mode is not None and mode not in {"mailbox", "notify", "digest"}:
+            raise ValueError("room delivery mode must be mailbox, notify, or digest")
         with self.database.session() as session:
             room = session.get(RoomRow, room_id)
             conversation = session.get(ConversationRow, conversation_id)
@@ -399,6 +399,19 @@ class MailboxStore:
                 return None
             return self._delivery(session, message_id, conversation_id)
 
+    def list_message_deliveries(
+        self, message_id: str, *, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        self._validate_limit(limit)
+        with self.database.session() as session:
+            recipients = session.scalars(
+                select(MailboxDeliveryRow.recipient_conversation_id)
+                .where(MailboxDeliveryRow.message_id == message_id)
+                .order_by(MailboxDeliveryRow.recipient_conversation_id)
+                .limit(limit)
+            ).all()
+            return [self._delivery(session, message_id, recipient) for recipient in recipients]
+
     def receive_pending(
         self,
         conversation_id: str,
@@ -443,7 +456,7 @@ class MailboxStore:
                         updated_at=now,
                     )
                 )
-                if result.rowcount != 1:
+                if cast(Any, result).rowcount != 1:
                     continue
                 candidate.state = "received"
                 candidate.listener_id = listener_id
@@ -565,7 +578,7 @@ class MailboxStore:
                     )
                     .values(attention_emitted_at=now, updated_at=now)
                 )
-                if result.rowcount != 1:
+                if cast(Any, result).rowcount != 1:
                     continue
                 candidate.attention_emitted_at = now
                 self._add_event(
@@ -633,7 +646,7 @@ class MailboxStore:
                     ),
                     execution_options={"synchronize_session": False},
                 )
-                if result.rowcount != 1:
+                if cast(Any, result).rowcount != 1:
                     session.rollback()
                     continue
                 session.commit()
@@ -748,7 +761,7 @@ class MailboxStore:
             raise ValueError("mailbox listener lease expired")
         if row.stop_requested_at is not None:
             raise ValueError("mailbox listener stop was requested")
-        return row
+        return cast(MailboxListenerRow, row)
 
     @staticmethod
     def _require_listener_identity(
@@ -771,7 +784,7 @@ class MailboxStore:
         row = session.get(MailboxDeliveryRow, (message_id, conversation_id))
         if row is None:
             raise ValueError("mailbox delivery does not exist")
-        return row
+        return cast(MailboxDeliveryRow, row)
 
     def _delivery(self, session: Any, message_id: str, conversation_id: str) -> dict[str, Any]:
         row = session.execute(
@@ -795,14 +808,19 @@ class MailboxStore:
             "message_id": delivery.message_id,
             "recipient_conversation_id": delivery.recipient_conversation_id,
             "state": delivery.state,
+            "processing_state": delivery.state,
             "listener_id": delivery.listener_id,
             "fencing_token": delivery.fencing_token,
             "detail": delivery.detail,
+            "processing_detail": delivery.detail,
+            "outcome_detail": delivery.detail,
             "reply_message_id": delivery.reply_message_id,
-            "created_at": _iso(delivery.created_at),
+            "created_at": _iso(message.created_at),
+            "delivery_created_at": _iso(delivery.created_at),
             "updated_at": _iso(delivery.updated_at),
             "received_at": _iso(delivery.received_at),
             "completed_at": _iso(delivery.completed_at),
+            "outcome_at": _iso(delivery.completed_at),
             "attention_emitted_at": _iso(delivery.attention_emitted_at),
             "correlation_id": message.correlation_id,
             "causation_id": message.causation_id,
@@ -825,6 +843,8 @@ class MailboxStore:
             "heartbeat_at": _iso(row.heartbeat_at),
             "expires_at": _iso(row.expires_at),
             "stop_requested_at": _iso(row.stop_requested_at),
+            "stop_requested": row.stop_requested_at is not None,
+            "state": "stopping" if row.stop_requested_at is not None else "waiting",
         }
 
     @staticmethod
@@ -882,6 +902,7 @@ class MessageStore:
     async def send(
         self,
         *,
+        message_id: str | None = None,
         body: str,
         target_conversation_id: str | None,
         room_id: str | None,
@@ -890,16 +911,32 @@ class MessageStore:
         operation: str,
         correlation_id: str | None,
         causation_id: str | None,
-        delivery_strategy: DeliveryStrategy = "queue",
+        delivery_strategy: DeliveryStrategy = "mailbox",
     ) -> dict[str, Any]:
         if bool(target_conversation_id) == bool(room_id):
             raise ValueError("provide exactly one conversation or room target")
         if operation not in {"message", "request", "reply", "forward", "complete", "needs_user"}:
             raise ValueError("unsupported message operation")
-        if delivery_strategy not in {"queue", "steer-or-queue"}:
+        if delivery_strategy not in {"mailbox", "queue", "steer-or-queue"}:
             raise ValueError("unsupported delivery strategy")
+        if message_id:
+            existing = self.get(message_id)
+            if existing is not None:
+                expected = {
+                    "body": body,
+                    "target_conversation_id": target_conversation_id,
+                    "room_id": room_id,
+                    "source_conversation_id": source_conversation_id,
+                    "actor_kind": actor_kind,
+                    "operation": operation,
+                    "correlation_id": correlation_id,
+                    "causation_id": causation_id,
+                }
+                if any(existing[key] != value for key, value in expected.items()):
+                    raise ValueError("message id already exists with different content")
+                return existing
         now = datetime.now(UTC)
-        message_id = f"message-{uuid4().hex}"
+        message_id = message_id or f"message-{uuid4().hex}"
         correlation = correlation_id or f"correlation-{uuid4().hex}"
         target_kind = EndpointKind.CONVERSATION if target_conversation_id else EndpointKind.ROOM
         target_id = target_conversation_id or room_id or ""
@@ -1083,6 +1120,7 @@ class MessageStore:
             "delivery_strategy": row.delivery_strategy,
             "delivery_route": row.delivery_route,
             "state": row.state,
+            "transport_state": row.state,
             "subject": row.subject,
             "error": row.error,
             "created_at": _iso(row.created_at),

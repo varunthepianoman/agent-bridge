@@ -4,6 +4,7 @@ import asyncio
 import inspect
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
@@ -18,7 +19,14 @@ from agent_bridge_bridge.transport import JetStreamSettings, JetStreamTransport
 from .broker_observer import BrokerProjectionObserver
 from .broker_projection import BrokerProjectionStore
 from .config import Settings
-from .core import AttentionStore, CollectionStore, MessageStore, NatsEventStore, RoomStore
+from .core import (
+    AttentionStore,
+    CollectionStore,
+    MailboxStore,
+    MessageStore,
+    NatsEventStore,
+    RoomStore,
+)
 from .core_api import mount_core_api
 from .db import ConversationRow, Database
 from .delivery import ConversationDeliveryWorker
@@ -98,6 +106,7 @@ def create_app(
         )
         transport = managed_transport
     messages = MessageStore(db, transport, attention)
+    mailbox = MailboxStore(db)
     launcher = NativeLauncher()
     runtime = ConversationRuntime(
         codex_bin=resolved.codex_bin,
@@ -106,11 +115,9 @@ def create_app(
     delivery_worker = ConversationDeliveryWorker(
         repository=repository,
         messages=messages,
+        mailbox=mailbox,
         rooms=rooms,
         attention=attention,
-        nodes=nodes,
-        runtime=runtime,
-        local_node_id=resolved.node_id,
     )
 
     selected_provider: ConversationProvider | None = provider
@@ -196,6 +203,35 @@ def create_app(
                             detail={"code": "full_reconciliation_failed", "message": str(exc)},
                         )
 
+            async def mailbox_outcome_sweep_forever() -> None:
+                while True:
+                    await asyncio.sleep(resolved.mailbox_sweep_interval_seconds)
+                    try:
+                        stale = await asyncio.to_thread(
+                            mailbox.claim_stale_received,
+                            older_than=datetime.now(UTC)
+                            - timedelta(seconds=resolved.mailbox_outcome_grace_seconds),
+                        )
+                        for item in stale:
+                            attention.create(
+                                category="needs_attention",
+                                kind="mailbox_outcome_missing",
+                                title="Mailbox message needs an outcome",
+                                detail=(
+                                    f"Message {item['message_id']} was received but has no "
+                                    "succeeded, blocked, or failed outcome. Requeue it manually "
+                                    "if another listener should process it."
+                                ),
+                                conversation_id=item["recipient_conversation_id"],
+                                correlation_id=item["correlation_id"],
+                            )
+                    except Exception as exc:
+                        nats_events.record(
+                            category="issue",
+                            severity="warning",
+                            detail={"code": "mailbox_outcome_sweep_failed", "message": str(exc)},
+                        )
+
             supervisor.create_task(
                 reconcile_forever(),
                 name="conversation-reconciliation",
@@ -204,6 +240,11 @@ def create_app(
             supervisor.create_task(
                 full_reconcile_forever(),
                 name="full-conversation-reconciliation",
+                critical=False,
+            )
+            supervisor.create_task(
+                mailbox_outcome_sweep_forever(),
+                name="mailbox-outcome-sweep",
                 critical=False,
             )
             yield
@@ -247,7 +288,7 @@ def create_app(
         result["capabilities"] = {
             "can_open": bool(row.resume_command),
             "can_receive_turn": row.delivery_mode == "direct",
-            "can_message": row.delivery_mode in {"direct", "via_parent"},
+            "can_message": True,
         }
         native_url = None
         if row.provider.casefold() == "codex":
@@ -270,6 +311,7 @@ def create_app(
     app.state.collections = collections
     app.state.rooms = rooms
     app.state.messages = messages
+    app.state.mailbox = mailbox
     app.state.nats_events = nats_events
     app.state.supervisor = supervisor
     app.state.transport = transport

@@ -95,10 +95,10 @@ export function refreshConversation(
   conversationId: string,
   waitSeconds = 30,
 ): Promise<OperationResponse> {
-  return request(`/conversations/${encodeURIComponent(conversationId)}/refresh`, {
-    method: "POST",
-    body: JSON.stringify({ wait_seconds: waitSeconds }),
-  });
+  return request(
+    `/conversations/${encodeURIComponent(conversationId)}/refresh?wait_seconds=${waitSeconds}`,
+    { method: "POST" },
+  );
 }
 
 export function mailbox(
@@ -118,21 +118,28 @@ export function stopMailboxListener(conversationId: string): Promise<OperationRe
 }
 
 export function completeMailboxMessage(
+  conversationId: string,
   messageId: string,
   input: {
     outcome: "succeeded" | "blocked" | "failed";
     detail?: string;
-    reply?: string;
+    reply_body?: string;
   },
 ): Promise<BridgeMessage> {
   return request(`/messages/${encodeURIComponent(messageId)}/complete`, {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ conversation_id: conversationId, ...input }),
   });
 }
 
-export function requeueMailboxMessage(messageId: string): Promise<BridgeMessage> {
-  return request(`/messages/${encodeURIComponent(messageId)}/requeue`, { method: "POST" });
+export function requeueMailboxMessage(
+  conversationId: string,
+  messageId: string,
+): Promise<BridgeMessage> {
+  return request(`/messages/${encodeURIComponent(messageId)}/requeue`, {
+    method: "POST",
+    body: JSON.stringify({ conversation_id: conversationId }),
+  });
 }
 
 export function coreMessages(): Promise<{ items: BridgeMessage[]; total: number }> {
