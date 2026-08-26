@@ -10,8 +10,8 @@ Updated: 2026-08-14
 2. **Directory:** candidate discovery, explicit selection, stable chat numbers, alias/provider-title
    ownership, selected-only transcripts, Codex/Claude/native-subagent coverage, collections, and
    deterministic location-bound identity.
-3. **Message fabric:** minimal envelope protocol, direct messages, wake/notify/digest rooms,
-   correlations, retries, dead letters, duplicate suppression, and completion-aware provider turns.
+3. **Message fabric:** minimal envelope protocol, direct mailboxes, mailbox/notify/digest rooms,
+   correlations, retries, dead letters, duplicate suppression, and explicit provider turns.
 4. **Machines:** authenticated catalog sync, 10-second daemon cycle, environment ownership, remote
    open/message/start commands, fencing, and fail-closed location behavior.
 5. **Attention and diagnostics:** Updates versus Needs Attention, NATS activity/issues/deliveries,
@@ -22,12 +22,15 @@ Updated: 2026-08-14
    their tables.
 8. **Verification:** Python tests, Ruff, strict mypy, frontend tests/typecheck/build, minimal public
    schema, and fresh Alembic upgrade.
+9. **Safe delivery:** mailbox-only messages, foreground listeners, separate transport/processing
+   outcomes, explicit replay, and read-only owning-node transcript refresh.
 
 ## Deliberately deferred
 
 - Real-world soak testing with multiple remote Codex and Claude nodes.
 - Optional provider hook installers; `agent-bridge reconcile` and `agent-bridge-node --once` are the
   hook targets today, with polling as the repair mechanism.
+- Automatic provider wake, listener restart, outer/inner relationships, and live token-delta relay.
 - Three-node NATS deployment automation and quorum failure tests.
 - Multi-user principals, workspaces, sharing, authorization, and federation, specified only in
   [docs/plans/shared-workspaces.md](docs/plans/shared-workspaces.md).

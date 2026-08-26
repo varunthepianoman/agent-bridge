@@ -48,12 +48,13 @@ Replace these placeholders:
 
 ## Robot safety boundary
 
-Agent Bridge delivers an incoming message as an ordinary provider user turn. It does not add a
-robot-specific authorization layer. On this machine:
+Agent Bridge appends incoming messages to a durable mailbox and never starts a provider turn.
+Mailbox safety does not add a robot-specific authorization layer once an agent intentionally reads
+and acts on mail. On this machine:
 
 - run Codex and `agent-bridge-node` as the normal robot-development user, never as `root`;
-- expect desktop deep links to fail as unsupported on the headless T-Box while provider turns
-  remain available;
+- expect desktop deep links to fail as unsupported on the headless T-Box while explicit provider
+  turns and foreground mailbox listeners remain available;
 - use read-only smoke prompts until message routing is proven;
 - do not ask the smoke agent to invoke Acteris, the ARCI Adapter, RobotWare, EGM, controller RPCs,
   fieldbus/I/O, safety signals, or robot motion;
@@ -276,10 +277,12 @@ message arrives, or when another conversation needs a concrete update about shar
   `agent-bridge show <conversation-id>` to resolve the recipient. Never guess an ID from a title.
 - Send directly with `agent-bridge message --chat <target-id> --from-chat <source-id>
   --operation <operation> --correlation-id <correlation-id> "<message>"`.
-- For an incoming message, treat From, Message, Correlation, and Operation as delivery metadata.
-  When a reply is requested, address it to From, use operation `reply`, and preserve Correlation.
-- Do not send secrets. A successful send means Bridge accepted the message, not that the recipient
-  completed the request. `waiting_for_provider` means the durable message is queued; do not resend.
+- Enter listener mode only when asked by calling `wait_mailbox` (or `agent-bridge wait`) with this
+  chat's exact Bridge conversation ID. Process every returned item, record `succeeded`, `blocked`,
+  or `failed`, then wait again until the foreground turn is cancelled.
+- Treat From, Message, Correlation, and Operation as delivery metadata. Reply to From with operation
+  `reply` and the same correlation ID. Do not send secrets. Hub acceptance, receipt, and completion
+  are separate states; never assume accepted mail has been processed.
 ```
 
 Restart newly launched Codex processes after changing `config.toml`; existing processes do not
@@ -475,9 +478,11 @@ Never guess IDs from titles or UI order:
   show <hub-source-conversation-id>
 ```
 
-### E2. Existing T-Box chat round trip
+### E2. Existing T-Box chat mailbox round trip
 
-Use a unique correlation ID:
+Open the existing T-Box chat yourself and ask it to enter foreground listener mode for its exact
+Bridge conversation ID. The pending listener tool call owns that existing turn's writer; Agent
+Bridge will not inject a competing turn. Then send mail with a unique correlation ID:
 
 ```bash
 /home/varunkamat/dev/ai-infra/agent-bridge/.venv/bin/agent-bridge message \
@@ -490,12 +495,15 @@ Use a unique correlation ID:
 
 Pass criteria:
 
-1. The T-Box node remains reachable while the provider turn runs.
-2. The request reaches `delivered`, or the correlated reply and command record explain any state
-   divergence under the known reliability limitation.
+1. The T-Box node remains reachable while the foreground listener runs.
+2. The request reaches transport state `delivered`, then processing state `received` and
+   `succeeded`.
 3. The T-Box agent reports the expected hostname and cwd.
 4. The Hub receives `ABB_T_BOX_EXISTING_PONG` with correlation `abb-t-box-existing-001`.
 5. No files, services, controller state, or robot state change.
+
+Cancel the listener turn or run `agent-bridge stop-listener <tbox-conversation-id>` and verify its
+listener becomes offline before opening another provider turn.
 
 ### E3. Start a new T-Box Codex chat
 
@@ -519,7 +527,8 @@ Pass criteria:
 2. Codex runs as `<tbox-user>` in `<safe-project-path>`.
 3. The returned provider thread is reconciled into the central catalog.
 4. The chat appears in candidates, or in Conversations if auto-add is enabled later.
-5. A fresh correlated follow-up and reply work without restarting the node.
+5. After the new chat enters listener mode, fresh correlated mail and a reply work without
+   restarting the node.
 
 ### E4. Inspect diagnostics
 
@@ -555,14 +564,15 @@ systemctl --user restart agent-bridge-node.service
 
 ## Current reliability limitation
 
-The current node is workable for cataloging, attention, and occasional cross-machine messages. A
-Linux systemd service with `Restart=always` should recover the daemon after process failure without
-manual intervention.
+The current node is workable for cataloging, attention, mailbox exchange, and occasional explicit
+remote provider commands. A Linux systemd service with `Restart=always` should recover the daemon
+after process failure without manual intervention.
 
-If the Hub/Tailscale connection or provider process disappears after a remote command is claimed,
-that individual request may remain `queued_remote` and require inspection or a fresh send. A stuck
-claimed command does not prevent later queued commands once the node is healthy. Do not depend on
-the current build for guaranteed exactly-once delivery of unattended consequential robot actions.
+If the Hub/Tailscale connection or provider process disappears after an explicit `start`, `turn`, or
+refresh command is claimed, that command may require inspection or a fresh request. This limitation
+does not make mailbox delivery start a provider turn. A stuck claimed command does not prevent later
+commands once the node is healthy. Do not depend on the current build for guaranteed exactly-once
+execution of unattended consequential robot actions.
 
 The planned durable fix is documented in
 [`plans/remote-command-reliability.md`](plans/remote-command-reliability.md).
@@ -604,12 +614,23 @@ This is expected while `AGENT_BRIDGE_SYNC_TRANSCRIPTS=0`. Metadata, titles, stat
 message history can still synchronize. Set it to `1` only after deciding to centralize transcript
 text.
 
-### A message remains `queued_remote`
+For a one-off safe read, request an owning-node refresh from the Hub:
 
-Check the correlation in the Hub UI, verify node reachability, and inspect the systemd journal. If
-the provider may have run, do not blindly resend a consequential prompt. For this initial read-only
-smoke test, confirm whether a correlated reply exists and send a fresh uniquely correlated ping if
-needed.
+```bash
+/home/varunkamat/dev/ai-infra/agent-bridge/.venv/bin/agent-bridge \
+  refresh <tbox-conversation-id> --wait-seconds 30
+```
+
+The T-Box node must use a read-only provider operation and return only sanitized status plus
+explicit user/assistant prose. It must not resume the chat, subscribe to its live stream, acquire
+its writer, or relay tool/reasoning records.
+
+### Mail remains `pending`
+
+Check the correlation and listener health in the Hub UI. `pending` means no listener has received
+the item; it does not mean a provider turn failed. Confirm the target agent is waiting on the exact
+conversation ID. Do not requeue a `received` item automatically: inspect its outcome/attention and
+use explicit `requeue` only after deciding replay is safe.
 
 ## Rollback
 

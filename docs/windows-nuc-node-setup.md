@@ -169,10 +169,12 @@ message arrives, or when another conversation needs a concrete update about shar
   `agent-bridge show <conversation-id>` to resolve the recipient. Never guess an ID from a title.
 - Send directly with `agent-bridge message --chat <target-id> --from-chat <source-id>
   --operation <operation> --correlation-id <correlation-id> "<message>"`.
-- For an incoming message, treat From, Message, Correlation, and Operation as delivery metadata.
-  When a reply is requested, address it to From, use operation `reply`, and preserve Correlation.
-- Do not send secrets. A successful send means Bridge accepted the message, not that the recipient
-  completed the request. `waiting_for_provider` means the durable message is queued; do not resend.
+- Enter listener mode only when asked by calling `wait_mailbox` (or `agent-bridge wait`) with this
+  chat's exact Bridge conversation ID. Process every returned item, record `succeeded`, `blocked`,
+  or `failed`, then wait again until the foreground turn is cancelled.
+- Treat From, Message, Correlation, and Operation as delivery metadata. Reply to From with operation
+  `reply` and the same correlation ID. Do not send secrets. Hub acceptance, receipt, and completion
+  are separate states; never assume accepted mail has been processed.
 ```
 
 Restart Codex after changing `config.toml` so new chats receive the MCP server. This MCP setup is
@@ -386,7 +388,9 @@ First resolve the selected Windows recipient; never guess an ID from its title o
   show <windows-conversation-id>
 ```
 
-Send an authenticated Bridge message with a unique correlation ID:
+Open the existing Windows chat yourself and ask it to enter foreground listener mode for its exact
+Bridge conversation ID. This creates one intentional provider turn whose pending listener tool call
+holds the writer. Then send authenticated mail with a unique correlation ID:
 
 ```bash
 /home/varunkamat/dev/ai-infra/agent-bridge/.venv/bin/agent-bridge message \
@@ -400,15 +404,16 @@ Send an authenticated Bridge message with a unique correlation ID:
 Pass criteria:
 
 1. The message is durably accepted by the Hub.
-2. The Windows node claims it within roughly one poll interval when it is not already executing a
-   provider turn.
-3. Codex resumes the exact Windows chat and sees the Bridge delivery metadata.
+2. The active listener receives it without Bridge starting or resuming a provider turn.
+3. The message progresses from transport delivery through `received` to `succeeded` processing.
 4. The Windows agent sends a reply to the `From` conversation with correlation
    `windows-nuc-smoke-001`.
 5. The reply arrives in the Linux source chat and both directions appear in message history.
 
-`waiting_for_provider` is not a failure. It means the provider currently owns that conversation's
-writer; Bridge keeps the durable message queued and should not resend it.
+Mail remaining `pending` is not a provider failure; it means no foreground listener has received
+it. Do not blindly requeue `received` mail. Inspect the processing outcome or attention item first,
+then use explicit requeue only when replay is safe. Cancel the listener turn or run
+`agent-bridge stop-listener <windows-conversation-id>` to release listener ownership.
 
 ### 8.2 Start a new Windows chat
 
@@ -433,7 +438,8 @@ Pass criteria:
 2. Codex runs in the specified Windows directory with Sol at medium effort.
 3. The new provider thread ID is returned and reconciled into the catalog.
 4. The chat appears in **Add chats**, or directly in Conversations if auto-add is enabled later.
-5. A follow-up message to the new chat works and is retained in message history.
+5. After the new chat enters listener mode, follow-up mail works and retains both transport and
+   processing history.
 
 ### 8.3 Inspect the system
 
@@ -447,6 +453,19 @@ On the Hub:
 
 Also inspect the dashboard and NATS server log. Confirm that retries, if any, stop after successful
 delivery and that each logical request has one completion.
+
+Request a targeted transcript refresh while the Windows chat is open or running:
+
+```bash
+/home/varunkamat/dev/ai-infra/agent-bridge/.venv/bin/agent-bridge \
+  refresh <windows-conversation-id> --wait-seconds 30
+```
+
+The Windows node uses Codex App Server `thread/read(includeTurns=true)` against the owning provider
+thread. Pass only if the Hub projection receives sanitized status and committed user/assistant prose
+without resuming the task, subscribing to it, acquiring its writer, or returning tool/reasoning
+records. A timeout may return queued command metadata; periodic transcript synchronization remains
+the fallback.
 
 ## 9. Enable normal catalog behavior
 

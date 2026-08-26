@@ -20,7 +20,7 @@ The single-user core provides:
 
 1. A selected conversation directory spanning Codex, Claude, machines, worktrees, hosts, and dev
    containers.
-2. Durable direct messages and lightweight rooms over one logical NATS JetStream service.
+2. Durable direct mailboxes and lightweight rooms over one logical NATS JetStream service.
 3. An attention inbox split into ordinary updates and items that need the user.
 4. Trusted remote nodes that discover provider chats, execute native open/turn/start actions only
    in their owning environment, and never fall back to another machine.
@@ -40,13 +40,13 @@ Codex / Claude native stores
           │ discover every 10 s (and on an optional provider hook)
           ▼
   Node daemon per execution environment ───── authenticated HTTPS ────┐
-          │ native open / start / turn commands                        │
+          │ native open / start / explicit turn / read-only refresh    │
           └─────────────────────────────────────────────────────────────┤
                                                                         ▼
                                                              Single-user Hub
                                                      SQLite directory + attention
                                                                         │
-                                             durable messages / rooms   │
+                                             durable mail / rooms       │
                                                                         ▼
                                                                NATS JetStream
 ```
@@ -72,24 +72,30 @@ Provider-native subagents are cataloged visibly and linked to their parent where
 Their delivery mode is truthful: `direct`, `via_parent`, or `catalog_only`. Bridge never silently
 sends a child-targeted message to its parent.
 
-## Messaging behavior
+## Mailbox and provider behavior
 
-Direct messages target one selected conversation. Rooms have members with one of three delivery
+Direct mail targets one selected conversation. Rooms have members with one of three delivery
 modes:
 
-- `wake`: deliver the message as an ordinary provider user turn;
+- `mailbox`: append durable mail for explicit listener receipt;
 - `notify`: create an update without starting a turn;
 - `digest`: retain it for a later summarized update.
 
 Every message has a generated message ID, correlation ID, optional causation ID, source, target,
-operation, durable state, and error. Bridge does not impose a conversational exchange limit;
-correlation counts and rates make runaway traffic visible.
+operation, transport state, processing state, and error/detail. Sending mail never starts, resumes,
+or steers a provider task. Transport (`queued`, `published`, `delivered`, `failed`) is recorded
+separately from processing (`pending`, `received`, `succeeded`, `blocked`, `failed`).
 
-Provider turns receive a plain authenticated header containing source, message ID, correlation,
-and operation. Per-conversation Bridge turns are serialized. Codex delivery resumes the stored
-thread and waits for the official `turn/completed` notification; Claude delivery waits for the
-non-interactive process. Broker leases are extended while a local turn runs. Duplicate broker
-delivery does not create a duplicate turn after a message is delivered or durably queued remotely.
+An agent explicitly enters foreground listener mode with its exact Bridge conversation ID. One
+listener may claim an inbox at a time. The blocking listener call uses short cancellable Hub waits,
+a durable cursor, heartbeat, and expiry while its existing provider turn owns the writer. It
+atomically receives an ordered batch, processes each item, records an outcome, and may send a
+correlated reply. Cancelling the turn or requesting listener stop ends the wait. Idle conversations
+are never awakened, and received-but-unfinished items are surfaced through attention rather than
+automatically replayed.
+
+Provider mutation is a separate explicit action. `turn` starts a provider turn; `steer` targets an
+already-active turn only where supported and does not fall back to queued mail.
 
 An agent may start a new full Codex or Claude conversation through MCP, CLI, or HTTP and may choose
 a trusted node/environment. This is a convenience action, not a hierarchy or role relationship.
@@ -100,7 +106,14 @@ The attention surface has two lanes:
 
 - **Needs attention:** failed delivery, provider failure, remote-node failure, or an explicit
   `needs_user` operation.
-- **Updates:** completed local/remote turns, remotely started agents, and room notifications.
+- **Updates:** completed local/remote turns, remotely started agents, listener lifecycle, and room
+  notifications.
+
+The Hub may request a targeted, read-only transcript refresh from the conversation's owning node.
+Codex refresh uses App Server `thread/read(includeTurns=true)` without resume, subscription, or
+writer acquisition. Identity is validated before projection updates, and only sanitized status plus
+explicit user/assistant prose is retained; tool, reasoning, credential, and raw JSONL data is
+excluded. Periodic synchronization remains the fallback.
 
 The NATS page combines live diagnostics with durable activity records. It exposes broker status,
 stream and consumer state, inbound/outbound history, retry and lease events, dead letters, startup
@@ -116,10 +129,13 @@ or reconciliation issues, message/correlation identifiers, and JSON export.
 | Inspect a chat | detail pane | `agent-bridge show` | `get_conversation` | native transcript | selected projection |
 | Rename/annotate | conversation detail | `agent-bridge rename` | — | provider title edit | alias metadata API |
 | Open native chat | Open native | `agent-bridge open` | `open_conversation` | already native | local launch or fenced remote command |
-| Send direct message | composer | `agent-bridge message --chat` | `send_message` | type a prompt manually | NATS inbox → provider user turn |
-| Send room message | room composer | `agent-bridge message --room` | `send_message` | — | NATS room → wake/notify/digest members |
+| Send direct mail | mailbox composer | `agent-bridge message --chat` | `send_message` | — | durable mailbox append; never a provider turn |
+| Send room mail | room composer | `agent-bridge message --room` | `send_message` | — | NATS room → mailbox/notify/digest members |
+| Inspect/wait for mail | mailbox panel | mailbox/listener commands | `list_inbox` / `wait_mailbox` | — | atomic receipt through one foreground listener |
+| Complete/requeue mail | mailbox panel | mailbox outcome commands | `complete_message` / `requeue_message` | — | audited processing transition; explicit replay |
 | Start full agent | creation form | `agent-bridge start [--model ...] [--effort ...]` | `start_agent` | New chat | local App Server/Claude or remote command; optional launch model and effort |
 | Send explicit turn / change effort | detail composer | `agent-bridge turn [--effort ...]` | `send_turn` | type a prompt / change provider setting | effort override applies to this and later turns; model cannot be changed after launch |
+| Refresh transcript | Refresh transcript | `agent-bridge refresh` | `refresh_conversation` | reopen/read task | owning-node read-only provider projection |
 | View/ack attention | Attention | `attention` / `ack` | `list_attention` / `acknowledge_attention` | provider notification | durable attention rows |
 | Manage rooms | Rooms | `rooms` | `list_rooms` | — | room and membership APIs |
 | Inspect machines | Machines | `nodes` | `list_nodes` | — | heartbeat/environment ownership |
@@ -129,14 +145,23 @@ HTTP/OpenAPI remains the complete low-level interface under `/api/v1`. The MCP s
 stdio facade (`agent-bridge-mcp`) over that API, so agents do not need direct database or NATS
 access.
 
+Mailbox HTTP operations are `GET /mailbox/{conversation_id}?state=…`, `POST
+/mailbox/{conversation_id}/wait`, `POST /mailbox/{conversation_id}/stop-listener`, `POST
+/messages/{message_id}/complete`, and `POST /messages/{message_id}/requeue`. Targeted read-only
+refresh is `POST /conversations/{conversation_id}/refresh`. Normal `POST /messages` accepts no
+delivery strategy. CLI equivalents are `inbox`, `wait`, `complete`, `requeue`, `stop-listener`, and
+`refresh`; MCP equivalents are `list_inbox`, `wait_mailbox`, `complete_message`, `requeue_message`,
+`stop_listener`, and `refresh_conversation`.
+
 ## API disposition
 
 ### Kept and amended
 
 - Conversations: changed from auto-imported catalog records to candidates plus explicit selection;
-  added stable numbers, aliases, kinds, delivery modes, location facts, turns, open, and creation.
+  added stable numbers, aliases, kinds, delivery modes, location facts, turns, open, creation, and
+  read-only targeted refresh.
 - Nodes/environments: kept authenticated sync, heartbeat, credentials, and fenced commands; added
-  message-turn and agent-start commands.
+  read-only refresh and explicit agent-start/turn commands.
 - Broker projection: retained internally for delivery/dead-letter history and surfaced through the
   `/nats/*` product vocabulary.
 - Backup, restore, retention, transcript deletion, redaction, and credential rotation: retained and
@@ -144,10 +169,11 @@ access.
 
 ### Added
 
-- `/conversations/candidates`, `/conversations/import`, collections, rooms, messages,
-  correlations, attention, and NATS diagnostics/activity endpoints.
+- `/conversations/candidates`, `/conversations/import`, collections, rooms, mailbox/listener
+  operations, message outcomes/requeue, correlations, attention, targeted refresh, and NATS
+  diagnostics/activity endpoints.
 - Unified human CLI and local stdio MCP tools.
-- Codex `thread/start`, `thread/resume`, `turn/start`, and completion-aware delivery.
+- Codex `thread/start`, `thread/resume`, and explicit completion-aware `turn/start` operations.
 
 ### Removed
 
@@ -169,7 +195,8 @@ restore a pre-0008 database backup to run the retired product.
   complete, so the fast pass also serves as the full repair pass.
 - Provider hooks may invoke `agent-bridge reconcile` locally or `agent-bridge-node --once` remotely
   for immediate refresh. Hooks are an acceleration, never the sole source of truth.
-- Web attention/messages/NATS poll every 5 seconds; directory and machine views poll every 10.
+- Web attention/messages/mailbox/NATS poll every 5 seconds; directory and machine views poll every
+  10. Listener waits are event-driven and may block for up to one hour.
 
 ## Deployment boundary
 
@@ -185,7 +212,12 @@ Federation and multi-user authorization are explicitly deferred to
   exported before old tables are removed.
 - Current candidates can be selected without selecting future chats.
 - Codex and Claude root chats and native subagents are cataloged with truthful delivery modes.
-- Direct and room messages are durable, correlated, deduplicated, retryable, and observable.
+- Direct and room mail is durable, correlated, deduplicated, retryable, and observable without
+  provider-turn injection.
+- Listener receipt and processing outcomes are exactly-once/idempotent, and listener cancellation
+  releases the provider writer.
+- Remote targeted refresh reads only sanitized committed provider content without acquiring a
+  writer.
 - Local and remote provider turns preserve location ownership and surface completion/failure.
 - Agent creation works locally and through a trusted node command.
 - Removed organizational APIs return 404.

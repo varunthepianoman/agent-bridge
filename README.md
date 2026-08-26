@@ -3,9 +3,10 @@
 Agent Bridge is a private address book, message fabric, and attention dashboard for selected Codex
 and Claude conversations across machines and execution environments.
 
-It catalogs chats you choose, sends durable direct/room messages through NATS JetStream, wakes the
-owning provider conversation as an ordinary user turn, and shows completions or failures in one
-place. It intentionally does not model Work Items, Roles, agent hierarchies, or workflows.
+It catalogs chats you choose, sends durable direct/room mail through NATS JetStream, and shows
+completion, blocker, and listener state in one place. Mail never creates or steers a provider turn;
+provider mutations are separate, explicit operations. It intentionally does not model Work Items,
+Roles, agent hierarchies, or workflows.
 
 The implemented architecture and complete interface matrix are in
 [docs/plans/general-execution-engine.md](docs/plans/general-execution-engine.md). Multi-user sharing
@@ -65,8 +66,12 @@ agent-bridge candidates
 agent-bridge add <conversation-id>
 agent-bridge chats --query socket
 agent-bridge message --chat <conversation-id> "Check the server side"
-agent-bridge message --chat <conversation-id> --delivery steer-or-queue \
-  "Consider this during the active turn"
+agent-bridge inbox <conversation-id>
+agent-bridge wait <conversation-id> --max-wait-seconds 3600
+agent-bridge complete <conversation-id> <message-id> --outcome succeeded
+agent-bridge requeue <conversation-id> <message-id> --detail "Safe to retry"
+agent-bridge stop-listener <conversation-id>
+agent-bridge refresh <conversation-id> --wait-seconds 30
 agent-bridge start --provider codex --cwd /work/project \
   --model gpt-5.6-sol --effort high "Investigate the failing test"
 agent-bridge turn <conversation-id> --effort xhigh "Re-check the edge cases"
@@ -79,19 +84,17 @@ configured defaults apply. An existing conversation's effort can be changed only
 explicit `turn --effort`; ordinary Bridge messages never change it. Bridge intentionally does not
 support changing a conversation's model after launch.
 
-Direct messages use durable `queue` delivery by default. The opt-in
-`--delivery steer-or-queue` strategy first preserves normal idle-turn delivery, but when a local
-Codex desktop or VS Code task already owns the writer, Bridge attempts to inject the authenticated
-message into that active turn. Definitive steering unavailability falls back to the durable queue.
-An ambiguous post-dispatch result is recorded as `delivery_uncertain` and requires attention rather
-than risking duplicate delivery. Message records expose the requested `delivery_strategy` and the
-actual `delivery_route` (`new_turn`, `steered`, or `queued_fallback`). Claude and remote-node
-steering are intentionally deferred.
+`message` appends to the recipient's durable mailbox and returns after Hub acceptance. It never
+resumes, wakes, or steers the provider task. An agent receives mail only while it has explicitly
+entered foreground listener mode; the pending listener tool holds that agent's existing writer,
+and cancelling the turn or issuing `stop-listener` releases it normally. Receipt and processing are
+separate: listener delivery records `received`, then the agent records `succeeded`, `blocked`, or
+`failed`. Use `turn` only when a new provider turn is intended.
 
-Local steering uses Codex's versioned same-user IPC owner/follower protocol. Bridge validates socket
-ownership and permissions, pins the protocol methods it uses, and fails closed to queue delivery on
-incompatibility. This integration contract is described in
-[ADR 0003](docs/adr/0003-local-codex-active-turn-steering.md).
+For observability, `refresh` requests sanitized, read-only transcript data from the machine that
+owns a conversation. Remote Codex refresh uses App Server `thread/read(includeTurns=true)` and does
+not resume, subscribe to, or acquire the task writer. See
+[ADR 0004](docs/adr/0004-durable-mailbox-and-foreground-listener.md).
 
 ## Configuration
 
