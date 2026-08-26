@@ -9,6 +9,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     String,
     Text,
@@ -155,6 +156,67 @@ class ConversationMessageRow(Base):
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class MailboxDeliveryRow(Base):
+    __tablename__ = "mailbox_deliveries"
+
+    message_id: Mapped[str] = mapped_column(
+        ForeignKey("conversation_messages.message_id", ondelete="CASCADE"), primary_key=True
+    )
+    recipient_conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.conversation_id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    state: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    listener_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    fencing_token: Mapped[int | None] = mapped_column(BigInteger)
+    detail: Mapped[str | None] = mapped_column(Text)
+    reply_message_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    attention_emitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+
+
+class MailboxEventRow(Base):
+    __tablename__ = "mailbox_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["message_id", "recipient_conversation_id"],
+            ["mailbox_deliveries.message_id", "mailbox_deliveries.recipient_conversation_id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    event_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    message_id: Mapped[str] = mapped_column(String(160), index=True)
+    recipient_conversation_id: Mapped[str] = mapped_column(String(80), index=True)
+    event_kind: Mapped[str] = mapped_column(String(40), index=True)
+    from_state: Mapped[str | None] = mapped_column(String(40))
+    to_state: Mapped[str] = mapped_column(String(40), index=True)
+    listener_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    fencing_token: Mapped[int | None] = mapped_column(BigInteger)
+    detail: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class MailboxListenerRow(Base):
+    __tablename__ = "mailbox_listeners"
+
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.conversation_id", ondelete="CASCADE"), primary_key=True
+    )
+    listener_id: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    fencing_token: Mapped[int] = mapped_column(BigInteger)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    stop_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class RoomRow(Base):
@@ -754,6 +816,9 @@ class Database:
             "collections",
             "collection_members",
             "conversation_messages",
+            "mailbox_deliveries",
+            "mailbox_events",
+            "mailbox_listeners",
             "rooms",
             "room_members",
             "attention_items",
