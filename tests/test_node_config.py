@@ -9,6 +9,9 @@ def test_non_loopback_node_hub_requires_https() -> None:
     with pytest.raises(ValueError, match="HTTPS"):
         NodeAgentSettings(hub_url="http://catalog.internal", token="secret")
     assert NodeAgentSettings(hub_url="http://127.0.0.1:8000", token="secret").hub_url
+    assert NodeAgentSettings(
+        hub_url="http://catalog.internal", token="secret", allow_insecure_http=True
+    ).hub_url
 
 
 def test_exclusions_cover_all_local_privacy_dimensions() -> None:

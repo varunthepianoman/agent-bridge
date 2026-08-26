@@ -71,13 +71,18 @@ class NodeAgentSettings:
     interval_seconds: float = 10.0
     request_timeout_seconds: float = 30.0
     max_provider_concurrency: int = 4
+    allow_insecure_http: bool = False
     codex_bin: str = "codex"
     claude_bin: str = "claude"
     exclusions: ExclusionRules = field(default_factory=ExclusionRules)
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.hub_url)
-        if parsed.scheme != "https" and parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        if (
+            parsed.scheme != "https"
+            and parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+            and not self.allow_insecure_http
+        ):
             raise ValueError("hub_url must use HTTPS except for loopback development")
         if not self.token:
             raise ValueError("a non-empty node token is required")
@@ -106,6 +111,7 @@ class NodeAgentSettings:
             max_provider_concurrency=int(
                 os.environ.get("AGENT_BRIDGE_MAX_PROVIDER_CONCURRENCY", "4")
             ),
+            allow_insecure_http=os.environ.get("AGENT_BRIDGE_ALLOW_INSECURE_HTTP", "0") == "1",
             codex_bin=os.environ.get("AGENT_BRIDGE_CODEX_BIN", "codex"),
             claude_bin=os.environ.get("AGENT_BRIDGE_CLAUDE_BIN", "claude"),
             exclusions=ExclusionRules(
