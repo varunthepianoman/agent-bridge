@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -313,7 +314,10 @@ def test_claimed_command_is_not_executed_again_after_node_restart(tmp_path: Path
     assert store.get_command(queued["command_id"])["status"] == "claimed"  # type: ignore[index]
 
 
-def test_initial_turn_event_requires_catalog_and_is_idempotent(tmp_path: Path) -> None:
+@pytest.mark.parametrize("provider", ["codex", "claude"])
+def test_initial_turn_event_requires_catalog_and_is_idempotent(
+    tmp_path: Path, provider: str
+) -> None:
     settings = Settings(
         state_dir=tmp_path,
         database_url=f"sqlite:///{tmp_path / 'turn-events.db'}",
@@ -341,7 +345,7 @@ def test_initial_turn_event_requires_catalog_and_is_idempotent(tmp_path: Path) -
             node_id="node-remote",
             kind="start_conversation",
             payload={
-                "provider": "codex",
+                "provider": provider,
                 "environment_id": "windows-native",
                 "workspace": "C:\\dev\\repo",
                 "prompt": "Inspect only",
@@ -357,7 +361,7 @@ def test_initial_turn_event_requires_catalog_and_is_idempotent(tmp_path: Path) -
             "event_id": "node-remote/thread-1/turn-1/completed",
             "node_id": "node-remote",
             "environment_id": "windows-native",
-            "provider": "codex",
+            "provider": provider,
             "provider_thread_id": "thread-1",
             "provider_turn_id": "turn-1",
             "command_id": queued["command_id"],

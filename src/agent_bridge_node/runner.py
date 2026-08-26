@@ -8,7 +8,6 @@ import subprocess
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from urllib.parse import urlparse
-from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -55,7 +54,7 @@ class NodeTurnEvent(BaseModel):
 
     event_id: str = Field(min_length=1)
     environment_id: str = Field(min_length=1)
-    provider: Literal["codex"] = "codex"
+    provider: Literal["codex", "claude"]
     provider_thread_id: str = Field(min_length=1)
     provider_turn_id: str = Field(min_length=1)
     command_id: str = Field(min_length=1)
@@ -67,6 +66,10 @@ class CodexRuntime(Protocol):
     async def start(self, request: NodeCommand) -> CommandResult: ...
 
     async def deliver(self, request: NodeCommand) -> CommandResult: ...
+
+
+class ClaudeRuntime(Protocol):
+    async def start(self, request: NodeCommand) -> CommandResult: ...
 
 
 class ProcessLauncher(Protocol):
@@ -119,39 +122,9 @@ class NativeCommandRunner:
         workspace = Path(request.workspace)
         if not workspace.is_dir():
             return self._failure(request, f"workspace is unavailable: {workspace}")
-        if request.provider == "codex":
-            return self._failure(request, "Codex start requires the App Server runner")
-        session_id = str(uuid4())
-        argv = [self.claude_bin, "--session-id", session_id]
-        if request.model:
-            argv.extend(("--model", request.model))
-        if request.effort:
-            argv.extend(("--effort", request.effort))
-        argv.extend(("--print", request.prompt))
-        try:
-            completed = subprocess.run(
-                argv,
-                cwd=workspace,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=24 * 60 * 60,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            return self._failure(request, f"provider agent failed to start: {error}")
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
-        if completed.returncode:
-            detail = (stderr or stdout)[-2_000:]
-            return self._failure(request, detail or "provider agent failed")
-        return CommandResult(
-            command_id=request.command_id,
-            claim_token=request.claim_token,
-            status="succeeded",
-            detail="Provider conversation completed its initial turn",
-            output={"provider_thread_id": session_id},
+        return self._failure(
+            request,
+            f"{request.provider.title()} start requires the asynchronous provider runner",
         )
 
     def _deliver_turn(self, request: NodeCommand) -> CommandResult:
@@ -311,15 +284,17 @@ class NativeCommandRunner:
 
 
 class RemoteCommandRunner:
-    """Route Codex commands asynchronously and keep native/Claude work off-loop."""
+    """Route provider commands asynchronously and keep native work off-loop."""
 
     def __init__(
         self,
         native: NativeCommandRunner,
         codex: CodexRuntime,
+        claude: ClaudeRuntime | None = None,
     ) -> None:
         self.native = native
         self.codex = codex
+        self.claude = claude
 
     async def execute(self, request: NodeCommand) -> CommandResult:
         if request.environment_id != self.native.environment_id:
@@ -337,14 +312,31 @@ class RemoteCommandRunner:
             if request.kind == "start_conversation":
                 return await self.codex.start(request)
             return await self.codex.deliver(request)
+        if request.provider == "claude" and request.kind == "start_conversation":
+            validation = self._validate_provider(request, "Claude")
+            if validation is not None:
+                return validation
+            if request.effort == "ultra":
+                return NativeCommandRunner._failure(
+                    request, "Claude does not support ultra reasoning effort"
+                )
+            if self.claude is None:
+                return NativeCommandRunner._failure(
+                    request, "Claude asynchronous runner is not configured"
+                )
+            return await self.claude.start(request)
         return await asyncio.to_thread(self.native.execute, request)
 
     @staticmethod
     def _validate_codex(request: NodeCommand) -> CommandResult | None:
+        return RemoteCommandRunner._validate_provider(request, "Codex")
+
+    @staticmethod
+    def _validate_provider(request: NodeCommand, provider: str) -> CommandResult | None:
         if not request.workspace or not request.prompt:
             return NativeCommandRunner._failure(
                 request,
-                "Codex command is missing a workspace or prompt",
+                f"{provider} command is missing a workspace or prompt",
             )
         if not Path(request.workspace).is_dir():
             return NativeCommandRunner._failure(
@@ -352,5 +344,7 @@ class RemoteCommandRunner:
                 f"workspace is unavailable: {request.workspace}",
             )
         if request.kind == "deliver_turn" and not request.provider_thread_id:
-            return NativeCommandRunner._failure(request, "Codex turn delivery is missing a thread")
+            return NativeCommandRunner._failure(
+                request, f"{provider} turn delivery is missing a thread"
+            )
         return None

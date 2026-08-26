@@ -16,6 +16,7 @@ from agent_bridge_providers import (
 )
 
 from .agent import NodeAgent
+from .claude_runtime import RemoteClaudeRuntime
 from .codex_runtime import RemoteCodexRuntime
 from .config import NodeAgentSettings
 from .hub import HubClient
@@ -52,18 +53,22 @@ async def _run(*, once: bool) -> None:
         codex_client,
         node_id=settings.node_id,
     )
-    runner = RemoteCommandRunner(native_runner, codex_runtime)
+    claude_runtime = RemoteClaudeRuntime(settings.claude_bin, node_id=settings.node_id)
+    runner = RemoteCommandRunner(native_runner, codex_runtime, claude_runtime)
     agent = NodeAgent(settings, hub, provider, runner)
     codex_runtime.set_event_sink(agent.queue_turn_event)
+    claude_runtime.set_event_sink(agent.queue_turn_event)
     try:
         if once:
             cycle = await agent.run_once()
             await codex_runtime.wait_for_background()
+            await claude_runtime.wait_for_background()
             agent.flush_pending()
             print(json.dumps(asdict(cycle), sort_keys=True))
         else:
             await agent.serve()
     finally:
+        await claude_runtime.close()
         await codex_runtime.close()
         await provider.close()
         await codex_client.close()

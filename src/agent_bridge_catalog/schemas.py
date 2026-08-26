@@ -72,7 +72,7 @@ class NodeTurnEventRequest(Input):
     event_id: str = Field(min_length=1, max_length=500)
     node_id: str = Field(min_length=1, max_length=160)
     environment_id: str = Field(min_length=1, max_length=160)
-    provider: str = Field(pattern="^codex$")
+    provider: str = Field(pattern="^(codex|claude)$")
     provider_thread_id: str = Field(min_length=1, max_length=500)
     provider_turn_id: str = Field(min_length=1, max_length=500)
     command_id: str = Field(min_length=1, max_length=160)

@@ -258,16 +258,13 @@ async def test_remote_runner_rejects_missing_codex_workspace_without_fallback() 
     assert runtime.starts == []
 
 
-def test_start_and_resume_claude_preserve_configuration(monkeypatch, tmp_path: Path) -> None:
-    calls: list[tuple[list[str], dict[str, object]]] = []
-
-    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        calls.append((argv, kwargs))
-        return subprocess.CompletedProcess(argv, 0, stdout="done", stderr="")
-
-    monkeypatch.setattr("agent_bridge_node.runner.subprocess.run", run)
-    runner = NativeCommandRunner(environment_id="host", claude_bin="claude-custom")
-    started = runner.execute(
+async def test_remote_runner_routes_claude_start_through_runtime(tmp_path: Path) -> None:
+    codex = FakeCodexRuntime()
+    claude = FakeCodexRuntime()
+    runner = RemoteCommandRunner(
+        NativeCommandRunner(environment_id="host"), codex, claude
+    )
+    result = await runner.execute(
         NodeCommand(
             command_id="cmd-start-claude",
             claim_token="claim-start-claude",
@@ -280,6 +277,21 @@ def test_start_and_resume_claude_preserve_configuration(monkeypatch, tmp_path: P
             effort="high",
         )
     )
+
+    assert result.status == "succeeded"
+    assert [item.command_id for item in claude.starts] == ["cmd-start-claude"]
+    assert codex.starts == []
+
+
+def test_deliver_claude_preserves_configuration(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, stdout="done", stderr="")
+
+    monkeypatch.setattr("agent_bridge_node.runner.subprocess.run", run)
+    runner = NativeCommandRunner(environment_id="host", claude_bin="claude-custom")
     resumed = runner.execute(
         NodeCommand(
             command_id="cmd-turn-claude",
@@ -293,18 +305,8 @@ def test_start_and_resume_claude_preserve_configuration(monkeypatch, tmp_path: P
             effort="xhigh",
         )
     )
-    assert started.status == "succeeded"
     assert resumed.status == "succeeded"
-    assert calls[0][0][0:2] == ["claude-custom", "--session-id"]
-    assert calls[0][0][3:] == [
-        "--model",
-        "opus",
-        "--effort",
-        "high",
-        "--print",
-        "Review the change",
-    ]
-    assert calls[1][0] == [
+    assert calls[0][0] == [
         "claude-custom",
         "--resume",
         "session-1",
