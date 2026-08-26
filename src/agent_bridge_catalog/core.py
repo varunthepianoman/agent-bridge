@@ -478,6 +478,7 @@ class MailboxStore:
         now = datetime.now(UTC)
         with self.database.session() as session:
             row = self._require_delivery(session, message_id, conversation_id)
+            self._require_claim(row, listener_id, fencing_token)
             if row.state in _MAILBOX_TERMINAL_STATES:
                 if row.state != outcome or row.reply_message_id != reply_message_id:
                     raise ValueError("mailbox delivery already has a conflicting outcome")
@@ -486,7 +487,6 @@ class MailboxStore:
                 raise ValueError("only a received mailbox delivery can be completed")
             # Completion validates the durable claim, not the live lease: the listener wait may
             # legitimately have ended while the agent processes the received batch.
-            self._require_claim(row, listener_id, fencing_token)
             row.state = outcome
             row.detail = detail
             row.reply_message_id = reply_message_id

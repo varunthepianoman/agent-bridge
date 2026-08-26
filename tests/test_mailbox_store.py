@@ -107,6 +107,16 @@ def test_listener_fence_claim_and_completion_survive_listener_release(tmp_path: 
         fencing_token=listener["fencing_token"],
         reply_message_id="reply-1",
     ) == completed
+    with pytest.raises(ValueError, match="different listener claim"):
+        mailbox.complete(
+            "message-1",
+            recipient,
+            outcome="succeeded",
+            detail="done",
+            listener_id="listener-stale",
+            fencing_token=listener["fencing_token"],
+            reply_message_id="reply-1",
+        )
     with pytest.raises(ValueError, match="conflicting"):
         mailbox.complete(
             "message-1",
