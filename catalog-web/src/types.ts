@@ -5,6 +5,14 @@ export interface ActionResponse {
   detail?: string;
 }
 
+export interface OperationResponse {
+  status?: string;
+  detail?: string;
+  conversation_id?: string;
+  message_id?: string;
+  command_id?: string;
+}
+
 export interface CatalogSettings {
   auto_add_new_chats: boolean;
 }
@@ -58,9 +66,33 @@ export interface BridgeMessage {
   operation: string;
   body: string;
   state: string;
+  transport_state?: "queued" | "published" | "delivered" | "failed";
+  processing_state?: "pending" | "received" | "succeeded" | "blocked" | "failed";
+  processing_detail?: string;
+  outcome_detail?: string;
+  received_at?: string;
+  completed_at?: string;
+  outcome_at?: string;
+  reply_message_id?: string;
   subject?: string;
   error?: string;
   created_at: string;
+}
+
+export interface MailboxListener {
+  listener_id: string;
+  conversation_id: string;
+  state?: "waiting" | "stopping" | "offline";
+  started_at?: string;
+  heartbeat_at?: string;
+  expires_at?: string;
+  stop_requested?: boolean;
+}
+
+export interface MailboxSnapshot {
+  items: BridgeMessage[];
+  total: number;
+  listener?: MailboxListener | null;
 }
 
 export interface BridgeRoom {
@@ -69,7 +101,7 @@ export interface BridgeRoom {
   description: string;
   members: Array<{
     conversation_id: string;
-    delivery_mode: "wake" | "notify" | "digest";
+    delivery_mode: "mailbox" | "notify" | "digest";
   }>;
 }
 

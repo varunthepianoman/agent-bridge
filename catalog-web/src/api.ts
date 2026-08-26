@@ -6,7 +6,9 @@ import type {
   CatalogNode,
   CatalogSettings,
   CoreConversation,
+  MailboxSnapshot,
   NatsEvent,
+  OperationResponse,
 } from "./types";
 
 const API_ROOT = import.meta.env.VITE_API_BASE ?? "/api/v1";
@@ -77,6 +79,60 @@ export function sendCoreMessage(input: {
   room_id?: string;
 }): Promise<BridgeMessage> {
   return request("/messages", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function sendProviderTurn(
+  conversationId: string,
+  input: { prompt: string; effort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra" },
+): Promise<OperationResponse> {
+  return request(`/conversations/${encodeURIComponent(conversationId)}/turns`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function refreshConversation(
+  conversationId: string,
+  waitSeconds = 30,
+): Promise<OperationResponse> {
+  return request(`/conversations/${encodeURIComponent(conversationId)}/refresh`, {
+    method: "POST",
+    body: JSON.stringify({ wait_seconds: waitSeconds }),
+  });
+}
+
+export function mailbox(
+  conversationId: string,
+  state?: BridgeMessage["processing_state"],
+): Promise<MailboxSnapshot> {
+  const params = new URLSearchParams();
+  if (state) params.set("state", state);
+  const query = params.size ? `?${params}` : "";
+  return request(`/mailbox/${encodeURIComponent(conversationId)}${query}`);
+}
+
+export function stopMailboxListener(conversationId: string): Promise<OperationResponse> {
+  return request(`/mailbox/${encodeURIComponent(conversationId)}/stop-listener`, {
+    method: "POST",
+  });
+}
+
+export function completeMailboxMessage(
+  messageId: string,
+  input: {
+    outcome: "succeeded" | "blocked" | "failed";
+    detail?: string;
+    reply?: string;
+  },
+): Promise<BridgeMessage> {
+  return request(`/messages/${encodeURIComponent(messageId)}/complete`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function requeueMailboxMessage(messageId: string): Promise<BridgeMessage> {
+  return request(`/messages/${encodeURIComponent(messageId)}/requeue`, { method: "POST" });
 }
 
 export function coreMessages(): Promise<{ items: BridgeMessage[]; total: number }> {

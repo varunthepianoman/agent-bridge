@@ -1,16 +1,19 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bell,
   Bot,
   Check,
   CircleAlert,
+  CircleStop,
+  ExternalLink,
   Inbox,
   MessageSquare,
   Monitor,
   Plus,
   RadioTower,
   RefreshCw,
+  RotateCcw,
   Search,
   Send,
   SquareTerminal,
@@ -27,14 +30,20 @@ import {
   createRoom,
   importConversations,
   listNodes,
+  mailbox,
   natsActivity,
   natsSummary,
   openCoreConversation,
   reconcileCore,
+  refreshConversation,
+  requeueMailboxMessage,
   rooms,
   sendCoreMessage,
+  sendProviderTurn,
+  stopMailboxListener,
   updateCatalogSettings,
 } from "./api";
+import type { MailboxSnapshot } from "./types";
 
 type Section = "conversations" | "attention" | "messages" | "rooms" | "nodes" | "nats";
 
@@ -44,6 +53,8 @@ export function App() {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string>();
   const [composer, setComposer] = useState("");
+  const [turnPrompt, setTurnPrompt] = useState("");
+  const [turnEffort, setTurnEffort] = useState<"" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra">("");
   const [openFeedback, setOpenFeedback] = useState<string>();
   const [adding, setAdding] = useState(false);
   const [candidateSelection, setCandidateSelection] = useState<Set<string>>(new Set());
@@ -59,6 +70,12 @@ export function App() {
     queryKey: ["core-conversation", selected],
     queryFn: () => coreConversation(selected!),
     enabled: Boolean(selected),
+  });
+  const inbox = useQuery({
+    queryKey: ["mailbox", selected],
+    queryFn: () => mailbox(selected!),
+    enabled: Boolean(selected),
+    refetchInterval: 5_000,
   });
   const candidates = useQuery({
     queryKey: ["candidates"],
@@ -77,6 +94,39 @@ export function App() {
   const send = useMutation({
     mutationFn: () => sendCoreMessage({ body: composer, target_conversation_id: selected }),
     onSuccess: async () => { setComposer(""); await cache.invalidateQueries({ queryKey: ["messages"] }); },
+  });
+  const sendTurn = useMutation({
+    mutationFn: () => sendProviderTurn(selected!, {
+      prompt: turnPrompt,
+      ...(turnEffort ? { effort: turnEffort } : {}),
+    }),
+    onSuccess: () => { setTurnPrompt(""); setOpenFeedback("Provider turn queued explicitly."); },
+    onError: (error) => setOpenFeedback(error instanceof Error ? error.message : "Provider turn failed."),
+  });
+  const refreshTranscript = useMutation({
+    mutationFn: () => refreshConversation(selected!),
+    onSuccess: async (result) => {
+      setOpenFeedback(result.detail ?? (result.command_id ? "Remote transcript refresh queued." : "Transcript refreshed."));
+      await cache.invalidateQueries({ queryKey: ["core-conversation", selected] });
+    },
+    onError: (error) => setOpenFeedback(error instanceof Error ? error.message : "Transcript refresh failed."),
+  });
+  const stopListener = useMutation({
+    mutationFn: () => stopMailboxListener(selected!),
+    onSuccess: async (result) => {
+      setOpenFeedback(result.detail ?? "Listener stop requested.");
+      await cache.invalidateQueries({ queryKey: ["mailbox", selected] });
+    },
+    onError: (error) => setOpenFeedback(error instanceof Error ? error.message : "Could not stop listener."),
+  });
+  const requeue = useMutation({
+    mutationFn: requeueMailboxMessage,
+    onSuccess: async () => {
+      await Promise.all([
+        cache.invalidateQueries({ queryKey: ["mailbox", selected] }),
+        cache.invalidateQueries({ queryKey: ["messages"] }),
+      ]);
+    },
   });
   const openNative = useMutation({
     mutationFn: ({ id, target }: { id: string; target: "desktop" | "terminal" }) => openCoreConversation(id, target),
@@ -108,11 +158,13 @@ export function App() {
           <section className="directory-pane"><label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search alias, title, project, machine…" /></label>
             <div className="chat-list">{conversations.data?.items.map((chat) => <button key={chat.conversation_id} className={selected === chat.conversation_id ? "chat-card selected" : "chat-card"} onClick={() => { setSelected(chat.conversation_id); setOpenFeedback(undefined); }}><span className={`provider ${chat.provider}`}>{providerBadge(chat.provider)}</span><span><strong>{chat.display_name}</strong><small>{chat.provider} · {chat.node_id}/{chat.environment_id}</small><em>{chat.preview || "No preview available"}</em></span><i className={`state ${chat.status}`} /></button>)}</div>
           </section>
-          <section className="detail-pane">{detail.data ? <><div className="detail-title"><div><span className="eyebrow">{detail.data.provider} · {detail.data.conversation_kind.replace("_", " ")}</span><h2>{detail.data.display_name}</h2><p>{detail.data.provider_title && detail.data.provider_title !== detail.data.alias ? `Provider title: ${detail.data.provider_title}` : detail.data.cwd}</p></div><div className="open-actions"><button className="primary" disabled={!detail.data.native_url || openNative.isPending} onClick={() => openNative.mutate({ id: detail.data.conversation_id, target: "desktop" })}>Open in {detail.data.provider === "claude" ? "Claude (in dev)" : "Codex"}</button><button disabled={!detail.data.capabilities.can_open || openNative.isPending} onClick={() => openNative.mutate({ id: detail.data.conversation_id, target: "terminal" })}><SquareTerminal size={15} /> Open in Terminal{detail.data.provider === "codex" ? " (in dev)" : ""}</button></div></div>
+          <section className="detail-pane">{detail.data ? <><div className="detail-title"><div><span className="eyebrow">{detail.data.provider} · {detail.data.conversation_kind.replace("_", " ")}</span><h2>{detail.data.display_name}</h2><p>{detail.data.provider_title && detail.data.provider_title !== detail.data.alias ? `Provider title: ${detail.data.provider_title}` : detail.data.cwd}</p></div><div className="open-actions"><button className="primary" disabled={!detail.data.native_url || openNative.isPending} onClick={() => openNative.mutate({ id: detail.data.conversation_id, target: "desktop" })}>Open in {detail.data.provider === "claude" ? "Claude (in dev)" : "Codex"}</button><button disabled={!detail.data.capabilities.can_open || openNative.isPending} onClick={() => openNative.mutate({ id: detail.data.conversation_id, target: "terminal" })}><SquareTerminal size={15} /> Open in Terminal{detail.data.provider === "codex" ? " (in dev)" : ""}</button><button disabled={refreshTranscript.isPending} onClick={() => refreshTranscript.mutate()}><RefreshCw size={15} /> {refreshTranscript.isPending ? "Refreshing…" : "Refresh transcript"}</button></div></div>
             {openFeedback && <p className="action-feedback" role="status">{openFeedback}</p>}
             <div className="facts"><span><small>Machine</small>{detail.data.node_id}</span><span><small>Environment</small>{detail.data.environment_id}</span><span><small>Delivery</small>{detail.data.delivery_mode}</span><span><small>Status</small>{detail.data.status}</span></div>
             <pre className="transcript">{detail.data.transcript_text || detail.data.preview || "Transcript will appear after the next reconciliation."}</pre>
-            <form className="composer" onSubmit={(event) => { event.preventDefault(); if (composer.trim()) send.mutate(); }}><textarea value={composer} onChange={(event) => setComposer(event.target.value)} placeholder="Send an authenticated Bridge message as a normal user turn…" /><button className="primary" disabled={!composer.trim() || !detail.data.capabilities.can_message}><Send size={16} /> Send</button></form>
+            <MailboxPanel snapshot={inbox.data} loading={inbox.isLoading} stopping={stopListener.isPending} requeueing={requeue.isPending} onStop={() => stopListener.mutate()} onRequeue={(id) => requeue.mutate(id)} />
+            <section className="send-panel mailbox-send"><div><strong>Send to mailbox</strong><small>Durable mail only. This does not wake, resume, or write to the provider conversation.</small></div><form className="composer" onSubmit={(event) => { event.preventDefault(); if (composer.trim()) send.mutate(); }}><textarea value={composer} onChange={(event) => setComposer(event.target.value)} placeholder="Write a durable mailbox message…" /><button className="primary" disabled={!composer.trim() || !detail.data.capabilities.can_message || send.isPending}><Send size={16} /> Send mail</button></form></section>
+            <details className="provider-controls"><summary><ExternalLink size={15} /> Explicit provider controls</summary><p>Starting a provider turn acquires the conversation writer. Use only when you intend to resume the agent.</p><form className="composer provider-composer" onSubmit={(event) => { event.preventDefault(); if (turnPrompt.trim()) sendTurn.mutate(); }}><textarea value={turnPrompt} onChange={(event) => setTurnPrompt(event.target.value)} placeholder="Prompt for a new provider turn…" /><select aria-label="Reasoning effort" value={turnEffort} onChange={(event) => setTurnEffort(event.target.value as typeof turnEffort)}><option value="">Default effort</option>{["low", "medium", "high", "xhigh", "max", "ultra"].map((effort) => <option value={effort} key={effort}>{effort}</option>)}</select><button className="danger-action" disabled={!turnPrompt.trim() || !detail.data.capabilities.can_receive_turn || sendTurn.isPending}><ExternalLink size={16} /> Start provider turn</button></form></details>
           </> : <div className="empty"><MessageSquare size={34} /><h2>Select a conversation</h2><p>Inspect its location, status, transcript, and message history.</p></div>}</section>
         </div>
       </>}
@@ -135,14 +187,39 @@ function AttentionView() {
 
 function MessagesView() {
   const query = useQuery({ queryKey: ["messages"], queryFn: coreMessages, refetchInterval: 5_000 });
-  return <><PageTitle title="Message history" subtitle="Incoming and outbound Bridge traffic with correlation and delivery state." /><section className="panel table-panel"><table><thead><tr><th>Time</th><th>Route</th><th>Message</th><th>Correlation</th><th>State</th></tr></thead><tbody>{query.data?.items.map((item) => <tr key={item.message_id}><td>{new Date(item.created_at).toLocaleString()}</td><td>{item.target_conversation_id || item.room_id}</td><td>{item.body}</td><td className="mono">{item.correlation_id}</td><td><span className={`pill ${item.state}`}>{item.state}</span></td></tr>)}</tbody></table></section></>;
+  return <><PageTitle title="Message history" subtitle="Durable mailbox traffic with separate transport and processing outcomes." /><section className="panel table-panel"><table><thead><tr><th>Time</th><th>Route</th><th>Message</th><th>Correlation</th><th>Transport</th><th>Processing</th></tr></thead><tbody>{query.data?.items.map((item) => <tr key={item.message_id}><td>{new Date(item.created_at).toLocaleString()}</td><td>{item.target_conversation_id || item.room_id}</td><td title={item.outcome_detail || item.processing_detail}>{item.body}</td><td className="mono">{item.correlation_id}</td><td><span className={`pill ${item.transport_state ?? item.state}`}>{item.transport_state ?? item.state}</span></td><td><span className={`pill ${item.processing_state ?? "pending"}`}>{item.processing_state ?? "pending"}</span>{item.reply_message_id && <small className="reply-link">reply {item.reply_message_id}</small>}</td></tr>)}</tbody></table></section></>;
 }
 
 function RoomsView() {
   const cache = useQueryClient(); const [name, setName] = useState("");
   const query = useQuery({ queryKey: ["rooms"], queryFn: rooms });
   const create = useMutation({ mutationFn: () => createRoom(name), onSuccess: async () => { setName(""); await cache.invalidateQueries({ queryKey: ["rooms"] }); } });
-  return <><PageTitle title="Rooms (in dev)" subtitle="Lightweight broadcast channels with wake, notify, or digest delivery." /><form className="inline-create" onSubmit={(event) => { event.preventDefault(); if (name.trim()) create.mutate(); }}><input value={name} onChange={(event) => setName(event.target.value)} placeholder="New room name" /><button className="primary"><Plus size={16} /> Create</button></form><div className="card-grid">{query.data?.items.map((room) => <article className="panel room-card" key={room.room_id}><Users /><h2>{room.name}</h2><p>{room.description || "No description"}</p><small>{room.members.length} members</small></article>)}</div></>;
+  return <><PageTitle title="Rooms (in dev)" subtitle="Lightweight broadcast channels with mailbox, notify, or digest delivery. Room mail never starts a provider turn." /><form className="inline-create" onSubmit={(event) => { event.preventDefault(); if (name.trim()) create.mutate(); }}><input value={name} onChange={(event) => setName(event.target.value)} placeholder="New room name" /><button className="primary"><Plus size={16} /> Create</button></form><div className="card-grid">{query.data?.items.map((room) => <article className="panel room-card" key={room.room_id}><Users /><h2>{room.name}</h2><p>{room.description || "No description"}</p><small>{room.members.length} members</small><div className="room-modes">{(["mailbox", "notify", "digest"] as const).map((mode) => <span key={mode}>{mode}: {room.members.filter((member) => member.delivery_mode === mode).length}</span>)}</div></article>)}</div></>;
+}
+
+function MailboxPanel({
+  snapshot,
+  loading,
+  stopping,
+  requeueing,
+  onStop,
+  onRequeue,
+}: {
+  snapshot?: MailboxSnapshot;
+  loading: boolean;
+  stopping: boolean;
+  requeueing: boolean;
+  onStop: () => void;
+  onRequeue: (messageId: string) => void;
+}) {
+  const listener = snapshot?.listener;
+  const listenerState = listener
+    ? listener.stop_requested ? "stopping" : listener.state ?? "waiting"
+    : "offline";
+  return <section className="mailbox-panel">
+    <header><div><strong><Inbox size={16} /> Mailbox</strong><small>{snapshot?.total ?? 0} messages · processing is agent-controlled</small></div><div className={`listener-state ${listenerState}`}><span className={listener ? "online-dot" : "offline-dot"} /><span>Listener {listenerState}</span>{listener && <button disabled={stopping} onClick={onStop}><CircleStop size={14} /> {stopping ? "Stopping…" : "Stop"}</button>}</div></header>
+    {loading ? <p className="muted">Loading mailbox…</p> : snapshot?.items.length ? <div className="mailbox-items">{snapshot.items.slice(0, 8).map((item) => <article key={item.message_id}><div><strong>{item.source_conversation_id || item.actor_kind}</strong><span className={`pill ${item.processing_state ?? "pending"}`}>{item.processing_state ?? "pending"}</span></div><p>{item.body}</p><small>{new Date(item.created_at).toLocaleString()} · {item.operation} · {item.correlation_id}</small>{(item.outcome_detail || item.processing_detail) && <em>{item.outcome_detail || item.processing_detail}</em>}{item.processing_state && item.processing_state !== "pending" && <button disabled={requeueing} onClick={() => onRequeue(item.message_id)}><RotateCcw size={13} /> Requeue</button>}</article>)}</div> : <p className="muted">No mailbox messages yet.</p>}
+  </section>;
 }
 
 function NodesView() {
