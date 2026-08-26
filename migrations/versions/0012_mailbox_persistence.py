@@ -17,6 +17,13 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     existing = set(sa.inspect(op.get_bind()).get_table_names())
+    if "room_members" in existing:
+        op.execute(
+            sa.text(
+                "UPDATE room_members SET delivery_mode = 'mailbox' "
+                "WHERE delivery_mode = 'wake'"
+            )
+        )
     if "mailbox_deliveries" not in existing:
         op.create_table(
             "mailbox_deliveries",
@@ -108,3 +115,10 @@ def downgrade() -> None:
     for table_name in ("mailbox_events", "mailbox_deliveries", "mailbox_listeners"):
         if table_name in existing:
             op.drop_table(table_name)
+    if "room_members" in existing:
+        op.execute(
+            sa.text(
+                "UPDATE room_members SET delivery_mode = 'wake' "
+                "WHERE delivery_mode = 'mailbox'"
+            )
+        )

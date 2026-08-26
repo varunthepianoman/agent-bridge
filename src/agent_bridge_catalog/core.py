@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
-from typing import Any, Protocol
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal, Protocol
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from agent_bridge_bridge.subjects import subject_for
 from agent_bridge_protocol.models import (
@@ -26,6 +28,9 @@ from .db import (
     ConversationMessageRow,
     ConversationRow,
     Database,
+    MailboxDeliveryRow,
+    MailboxEventRow,
+    MailboxListenerRow,
     NatsEventRow,
     RoomMemberRow,
     RoomRow,
@@ -37,7 +42,11 @@ class Publisher(Protocol):
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.isoformat()
 
 
 class CollectionStore:
@@ -303,6 +312,563 @@ class RoomStore:
             "created_at": _iso(row.created_at),
             "updated_at": _iso(row.updated_at),
         }
+
+
+MailboxOutcome = Literal["succeeded", "blocked", "failed"]
+_MAILBOX_TERMINAL_STATES = frozenset({"succeeded", "blocked", "failed"})
+
+
+class MailboxStore:
+    """Durable, per-recipient mailbox processing state.
+
+    ``ConversationMessageRow.state`` remains the transport projection. This store owns only
+    recipient processing state and its append-only transition history.
+    """
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def enqueue(
+        self, message_id: str, recipient_conversation_ids: Iterable[str]
+    ) -> list[dict[str, Any]]:
+        recipients = list(dict.fromkeys(recipient_conversation_ids))
+        if not recipients:
+            return []
+        now = datetime.now(UTC)
+        with self.database.session() as session:
+            if session.get(ConversationMessageRow, message_id) is None:
+                raise ValueError("unknown mailbox message")
+            known = set(
+                session.scalars(
+                    select(ConversationRow.conversation_id).where(
+                        ConversationRow.conversation_id.in_(recipients)
+                    )
+                ).all()
+            )
+            missing = sorted(set(recipients) - known)
+            if missing:
+                raise ValueError(f"unknown mailbox recipients: {', '.join(missing)}")
+            for recipient in recipients:
+                key = (message_id, recipient)
+                if session.get(MailboxDeliveryRow, key) is not None:
+                    continue
+                row = MailboxDeliveryRow(
+                    message_id=message_id,
+                    recipient_conversation_id=recipient,
+                    state="pending",
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(row)
+                self._add_event(session, row, event_kind="created", to_state="pending", now=now)
+            session.commit()
+            return [self._delivery(session, message_id, recipient) for recipient in recipients]
+
+    def list_inbox(
+        self,
+        conversation_id: str,
+        *,
+        state: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        self._validate_limit(limit)
+        with self.database.session() as session:
+            statement = (
+                select(MailboxDeliveryRow, ConversationMessageRow)
+                .join(
+                    ConversationMessageRow,
+                    ConversationMessageRow.message_id == MailboxDeliveryRow.message_id,
+                )
+                .where(MailboxDeliveryRow.recipient_conversation_id == conversation_id)
+            )
+            if state is not None:
+                statement = statement.where(MailboxDeliveryRow.state == state)
+            rows = session.execute(
+                statement.order_by(
+                    ConversationMessageRow.created_at, ConversationMessageRow.message_id
+                ).limit(limit)
+            ).all()
+            return [self._delivery_dict(delivery, message) for delivery, message in rows]
+
+    def get_delivery(
+        self, message_id: str, conversation_id: str
+    ) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            delivery = session.get(MailboxDeliveryRow, (message_id, conversation_id))
+            if delivery is None:
+                return None
+            return self._delivery(session, message_id, conversation_id)
+
+    def receive_pending(
+        self,
+        conversation_id: str,
+        *,
+        listener_id: str,
+        fencing_token: int,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        self._validate_limit(limit)
+        now = datetime.now(UTC)
+        claimed: list[str] = []
+        with self.database.session() as session:
+            self._require_live_listener(
+                session, conversation_id, listener_id, fencing_token, now=now
+            )
+            candidates = session.scalars(
+                select(MailboxDeliveryRow)
+                .join(
+                    ConversationMessageRow,
+                    ConversationMessageRow.message_id == MailboxDeliveryRow.message_id,
+                )
+                .where(
+                    MailboxDeliveryRow.recipient_conversation_id == conversation_id,
+                    MailboxDeliveryRow.state == "pending",
+                )
+                .order_by(ConversationMessageRow.created_at, ConversationMessageRow.message_id)
+                .limit(limit)
+            ).all()
+            for candidate in candidates:
+                result = session.execute(
+                    update(MailboxDeliveryRow)
+                    .where(
+                        MailboxDeliveryRow.message_id == candidate.message_id,
+                        MailboxDeliveryRow.recipient_conversation_id == conversation_id,
+                        MailboxDeliveryRow.state == "pending",
+                    )
+                    .values(
+                        state="received",
+                        listener_id=listener_id,
+                        fencing_token=fencing_token,
+                        received_at=now,
+                        updated_at=now,
+                    )
+                )
+                if result.rowcount != 1:
+                    continue
+                candidate.state = "received"
+                candidate.listener_id = listener_id
+                candidate.fencing_token = fencing_token
+                self._add_event(
+                    session,
+                    candidate,
+                    event_kind="received",
+                    from_state="pending",
+                    to_state="received",
+                    listener_id=listener_id,
+                    fencing_token=fencing_token,
+                    now=now,
+                )
+                claimed.append(candidate.message_id)
+            session.commit()
+            return [self._delivery(session, message_id, conversation_id) for message_id in claimed]
+
+    def complete(
+        self,
+        message_id: str,
+        conversation_id: str,
+        *,
+        outcome: MailboxOutcome,
+        detail: str | None,
+        listener_id: str,
+        fencing_token: int,
+        reply_message_id: str | None = None,
+    ) -> dict[str, Any]:
+        if outcome not in _MAILBOX_TERMINAL_STATES:
+            raise ValueError("mailbox outcome must be succeeded, blocked, or failed")
+        now = datetime.now(UTC)
+        with self.database.session() as session:
+            row = self._require_delivery(session, message_id, conversation_id)
+            if row.state in _MAILBOX_TERMINAL_STATES:
+                if row.state != outcome or row.reply_message_id != reply_message_id:
+                    raise ValueError("mailbox delivery already has a conflicting outcome")
+                return self._delivery(session, message_id, conversation_id)
+            if row.state != "received":
+                raise ValueError("only a received mailbox delivery can be completed")
+            # Completion validates the durable claim, not the live lease: the listener wait may
+            # legitimately have ended while the agent processes the received batch.
+            self._require_claim(row, listener_id, fencing_token)
+            row.state = outcome
+            row.detail = detail
+            row.reply_message_id = reply_message_id
+            row.completed_at = now
+            row.updated_at = now
+            self._add_event(
+                session,
+                row,
+                event_kind="completed",
+                from_state="received",
+                to_state=outcome,
+                listener_id=listener_id,
+                fencing_token=fencing_token,
+                detail=detail,
+                now=now,
+            )
+            session.commit()
+            return self._delivery(session, message_id, conversation_id)
+
+    def requeue(
+        self, message_id: str, conversation_id: str, *, detail: str | None = None
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        with self.database.session() as session:
+            row = self._require_delivery(session, message_id, conversation_id)
+            if row.state == "pending":
+                return self._delivery(session, message_id, conversation_id)
+            previous = row.state
+            row.state = "pending"
+            row.listener_id = None
+            row.fencing_token = None
+            row.detail = detail
+            row.reply_message_id = None
+            row.received_at = None
+            row.completed_at = None
+            row.attention_emitted_at = None
+            row.updated_at = now
+            self._add_event(
+                session,
+                row,
+                event_kind="requeued",
+                from_state=previous,
+                to_state="pending",
+                detail=detail,
+                now=now,
+            )
+            session.commit()
+            return self._delivery(session, message_id, conversation_id)
+
+    def claim_stale_received(
+        self, *, older_than: datetime, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        self._validate_limit(limit)
+        now = datetime.now(UTC)
+        claimed: list[tuple[str, str]] = []
+        with self.database.session() as session:
+            candidates = session.scalars(
+                select(MailboxDeliveryRow)
+                .where(
+                    MailboxDeliveryRow.state == "received",
+                    MailboxDeliveryRow.received_at <= older_than,
+                    MailboxDeliveryRow.attention_emitted_at.is_(None),
+                )
+                .order_by(MailboxDeliveryRow.received_at, MailboxDeliveryRow.message_id)
+                .limit(limit)
+            ).all()
+            for candidate in candidates:
+                result = session.execute(
+                    update(MailboxDeliveryRow)
+                    .where(
+                        MailboxDeliveryRow.message_id == candidate.message_id,
+                        MailboxDeliveryRow.recipient_conversation_id
+                        == candidate.recipient_conversation_id,
+                        MailboxDeliveryRow.state == "received",
+                        MailboxDeliveryRow.attention_emitted_at.is_(None),
+                    )
+                    .values(attention_emitted_at=now, updated_at=now)
+                )
+                if result.rowcount != 1:
+                    continue
+                candidate.attention_emitted_at = now
+                self._add_event(
+                    session,
+                    candidate,
+                    event_kind="attention_emitted",
+                    from_state="received",
+                    to_state="received",
+                    now=now,
+                )
+                claimed.append((candidate.message_id, candidate.recipient_conversation_id))
+            session.commit()
+            return [
+                self._delivery(session, message_id, recipient)
+                for message_id, recipient in claimed
+            ]
+
+    def acquire_listener(
+        self,
+        conversation_id: str,
+        *,
+        listener_id: str | None = None,
+        lease_seconds: float = 60.0,
+    ) -> dict[str, Any]:
+        self._validate_lease(lease_seconds)
+        resolved_id = listener_id or f"listener-{uuid4().hex}"
+        for _attempt in range(3):
+            now = datetime.now(UTC)
+            expires_at = now + timedelta(seconds=lease_seconds)
+            with self.database.session() as session:
+                row = session.get(MailboxListenerRow, conversation_id)
+                if row is None:
+                    row = MailboxListenerRow(
+                        conversation_id=conversation_id,
+                        listener_id=resolved_id,
+                        fencing_token=1,
+                        started_at=now,
+                        heartbeat_at=now,
+                        expires_at=expires_at,
+                    )
+                    session.add(row)
+                    try:
+                        session.commit()
+                    except IntegrityError:
+                        session.rollback()
+                        continue
+                    return self._listener_dict(row)
+                if not self._is_expired(row.expires_at, now):
+                    raise ValueError("conversation already has an active mailbox listener")
+                previous_token = row.fencing_token
+                result = session.execute(
+                    update(MailboxListenerRow)
+                    .where(
+                        MailboxListenerRow.conversation_id == conversation_id,
+                        MailboxListenerRow.fencing_token == previous_token,
+                        MailboxListenerRow.expires_at <= now,
+                    )
+                    .values(
+                        listener_id=resolved_id,
+                        fencing_token=previous_token + 1,
+                        started_at=now,
+                        heartbeat_at=now,
+                        expires_at=expires_at,
+                        stop_requested_at=None,
+                    ),
+                    execution_options={"synchronize_session": False},
+                )
+                if result.rowcount != 1:
+                    session.rollback()
+                    continue
+                session.commit()
+                session.expire_all()
+                current = session.get(MailboxListenerRow, conversation_id)
+                assert current is not None
+                return self._listener_dict(current)
+        raise ValueError("mailbox listener was concurrently acquired")
+
+    def heartbeat_listener(
+        self,
+        conversation_id: str,
+        *,
+        listener_id: str,
+        fencing_token: int,
+        lease_seconds: float = 60.0,
+    ) -> dict[str, Any]:
+        self._validate_lease(lease_seconds)
+        now = datetime.now(UTC)
+        with self.database.session() as session:
+            row = self._require_live_listener(
+                session, conversation_id, listener_id, fencing_token, now=now
+            )
+            row.heartbeat_at = now
+            row.expires_at = now + timedelta(seconds=lease_seconds)
+            session.commit()
+            return self._listener_dict(row)
+
+    def request_listener_stop(self, conversation_id: str) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            row = session.get(MailboxListenerRow, conversation_id)
+            if row is None:
+                return None
+            if row.stop_requested_at is None:
+                row.stop_requested_at = datetime.now(UTC)
+                session.commit()
+            return self._listener_dict(row)
+
+    def release_listener(
+        self, conversation_id: str, *, listener_id: str, fencing_token: int
+    ) -> bool:
+        now = datetime.now(UTC)
+        with self.database.session() as session:
+            row = session.get(MailboxListenerRow, conversation_id)
+            if row is None:
+                return False
+            self._require_listener_identity(row, listener_id, fencing_token)
+            if not self._is_expired(row.expires_at, now):
+                row.expires_at = now
+                row.heartbeat_at = now
+                session.commit()
+            return True
+
+    def get_listener(self, conversation_id: str) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            row = session.get(MailboxListenerRow, conversation_id)
+            return self._listener_dict(row) if row else None
+
+    def list_events(
+        self,
+        *,
+        message_id: str | None = None,
+        conversation_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        self._validate_limit(limit)
+        with self.database.session() as session:
+            statement = select(MailboxEventRow)
+            if message_id is not None:
+                statement = statement.where(MailboxEventRow.message_id == message_id)
+            if conversation_id is not None:
+                statement = statement.where(
+                    MailboxEventRow.recipient_conversation_id == conversation_id
+                )
+            rows = session.scalars(
+                statement.order_by(MailboxEventRow.created_at, MailboxEventRow.event_id).limit(
+                    limit
+                )
+            ).all()
+            return [self._event_dict(row) for row in rows]
+
+    @staticmethod
+    def _validate_limit(limit: int) -> None:
+        if limit < 1 or limit > 1000:
+            raise ValueError("mailbox limit must be between 1 and 1000")
+
+    @staticmethod
+    def _validate_lease(lease_seconds: float) -> None:
+        if lease_seconds <= 0 or lease_seconds > 3600:
+            raise ValueError("mailbox listener lease must be between 0 and 3600 seconds")
+
+    @staticmethod
+    def _is_expired(expires_at: datetime, now: datetime) -> bool:
+        if expires_at.tzinfo is None:
+            now = now.replace(tzinfo=None)
+        return expires_at <= now
+
+    def _require_live_listener(
+        self,
+        session: Any,
+        conversation_id: str,
+        listener_id: str,
+        fencing_token: int,
+        *,
+        now: datetime,
+    ) -> MailboxListenerRow:
+        row = session.get(MailboxListenerRow, conversation_id)
+        if row is None:
+            raise ValueError("mailbox listener does not exist")
+        self._require_listener_identity(row, listener_id, fencing_token)
+        if self._is_expired(row.expires_at, now):
+            raise ValueError("mailbox listener lease expired")
+        if row.stop_requested_at is not None:
+            raise ValueError("mailbox listener stop was requested")
+        return row
+
+    @staticmethod
+    def _require_listener_identity(
+        row: MailboxListenerRow, listener_id: str, fencing_token: int
+    ) -> None:
+        if row.listener_id != listener_id or row.fencing_token != fencing_token:
+            raise ValueError("stale mailbox listener fencing token")
+
+    @staticmethod
+    def _require_claim(
+        row: MailboxDeliveryRow, listener_id: str, fencing_token: int
+    ) -> None:
+        if row.listener_id != listener_id or row.fencing_token != fencing_token:
+            raise ValueError("mailbox delivery belongs to a different listener claim")
+
+    @staticmethod
+    def _require_delivery(
+        session: Any, message_id: str, conversation_id: str
+    ) -> MailboxDeliveryRow:
+        row = session.get(MailboxDeliveryRow, (message_id, conversation_id))
+        if row is None:
+            raise ValueError("mailbox delivery does not exist")
+        return row
+
+    def _delivery(self, session: Any, message_id: str, conversation_id: str) -> dict[str, Any]:
+        row = session.execute(
+            select(MailboxDeliveryRow, ConversationMessageRow)
+            .join(
+                ConversationMessageRow,
+                ConversationMessageRow.message_id == MailboxDeliveryRow.message_id,
+            )
+            .where(
+                MailboxDeliveryRow.message_id == message_id,
+                MailboxDeliveryRow.recipient_conversation_id == conversation_id,
+            )
+        ).one()
+        return self._delivery_dict(*row)
+
+    @staticmethod
+    def _delivery_dict(
+        delivery: MailboxDeliveryRow, message: ConversationMessageRow
+    ) -> dict[str, Any]:
+        return {
+            "message_id": delivery.message_id,
+            "recipient_conversation_id": delivery.recipient_conversation_id,
+            "state": delivery.state,
+            "listener_id": delivery.listener_id,
+            "fencing_token": delivery.fencing_token,
+            "detail": delivery.detail,
+            "reply_message_id": delivery.reply_message_id,
+            "created_at": _iso(delivery.created_at),
+            "updated_at": _iso(delivery.updated_at),
+            "received_at": _iso(delivery.received_at),
+            "completed_at": _iso(delivery.completed_at),
+            "attention_emitted_at": _iso(delivery.attention_emitted_at),
+            "correlation_id": message.correlation_id,
+            "causation_id": message.causation_id,
+            "source_conversation_id": message.source_conversation_id,
+            "room_id": message.room_id,
+            "actor_kind": message.actor_kind,
+            "operation": message.operation,
+            "body": message.body,
+            "delivery_strategy": message.delivery_strategy,
+            "message_created_at": _iso(message.created_at),
+        }
+
+    @staticmethod
+    def _listener_dict(row: MailboxListenerRow) -> dict[str, Any]:
+        return {
+            "conversation_id": row.conversation_id,
+            "listener_id": row.listener_id,
+            "fencing_token": row.fencing_token,
+            "started_at": _iso(row.started_at),
+            "heartbeat_at": _iso(row.heartbeat_at),
+            "expires_at": _iso(row.expires_at),
+            "stop_requested_at": _iso(row.stop_requested_at),
+        }
+
+    @staticmethod
+    def _event_dict(row: MailboxEventRow) -> dict[str, Any]:
+        return {
+            "event_id": row.event_id,
+            "message_id": row.message_id,
+            "recipient_conversation_id": row.recipient_conversation_id,
+            "event_kind": row.event_kind,
+            "from_state": row.from_state,
+            "to_state": row.to_state,
+            "listener_id": row.listener_id,
+            "fencing_token": row.fencing_token,
+            "detail": row.detail,
+            "created_at": _iso(row.created_at),
+        }
+
+    @staticmethod
+    def _add_event(
+        session: Any,
+        delivery: MailboxDeliveryRow,
+        *,
+        event_kind: str,
+        to_state: str,
+        now: datetime,
+        from_state: str | None = None,
+        listener_id: str | None = None,
+        fencing_token: int | None = None,
+        detail: str | None = None,
+    ) -> None:
+        session.add(
+            MailboxEventRow(
+                event_id=f"mailbox-event-{uuid4().hex}",
+                message_id=delivery.message_id,
+                recipient_conversation_id=delivery.recipient_conversation_id,
+                event_kind=event_kind,
+                from_state=from_state,
+                to_state=to_state,
+                listener_id=listener_id,
+                fencing_token=fencing_token,
+                detail=detail,
+                created_at=now,
+            )
+        )
 
 
 class MessageStore:

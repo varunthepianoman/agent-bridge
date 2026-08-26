@@ -238,7 +238,7 @@ class RoomMemberRow(Base):
     conversation_id: Mapped[str] = mapped_column(
         ForeignKey("conversations.conversation_id", ondelete="CASCADE"), primary_key=True
     )
-    delivery_mode: Mapped[str] = mapped_column(String(40), default="wake")
+    delivery_mode: Mapped[str] = mapped_column(String(40), default="mailbox")
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
