@@ -678,7 +678,7 @@ class MailboxStore:
     def request_listener_stop(self, conversation_id: str) -> dict[str, Any] | None:
         with self.database.session() as session:
             row = session.get(MailboxListenerRow, conversation_id)
-            if row is None:
+            if row is None or self._is_expired(row.expires_at, datetime.now(UTC)):
                 return None
             if row.stop_requested_at is None:
                 row.stop_requested_at = datetime.now(UTC)
@@ -703,7 +703,9 @@ class MailboxStore:
     def get_listener(self, conversation_id: str) -> dict[str, Any] | None:
         with self.database.session() as session:
             row = session.get(MailboxListenerRow, conversation_id)
-            return self._listener_dict(row) if row else None
+            if row is None or self._is_expired(row.expires_at, datetime.now(UTC)):
+                return None
+            return self._listener_dict(row)
 
     def list_events(
         self,

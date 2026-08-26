@@ -85,6 +85,8 @@ def test_listener_fence_claim_and_completion_survive_listener_release(tmp_path: 
         listener_id="listener-a",
         fencing_token=listener["fencing_token"],
     )
+    assert mailbox.get_listener(recipient) is None
+    assert mailbox.request_listener_stop(recipient) is None
     completed = mailbox.complete(
         "message-1",
         recipient,
