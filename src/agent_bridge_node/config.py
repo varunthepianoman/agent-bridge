@@ -70,6 +70,7 @@ class NodeAgentSettings:
     environment_kind: str = field(default_factory=lambda: platform.system().casefold())
     interval_seconds: float = 10.0
     request_timeout_seconds: float = 30.0
+    max_provider_concurrency: int = 4
     codex_bin: str = "codex"
     claude_bin: str = "claude"
     exclusions: ExclusionRules = field(default_factory=ExclusionRules)
@@ -82,6 +83,8 @@ class NodeAgentSettings:
             raise ValueError("a non-empty node token is required")
         if self.interval_seconds <= 0 or self.request_timeout_seconds <= 0:
             raise ValueError("interval and request timeout must be positive")
+        if self.max_provider_concurrency <= 0:
+            raise ValueError("max provider concurrency must be positive")
 
     @classmethod
     def from_environment(cls) -> NodeAgentSettings:
@@ -100,6 +103,9 @@ class NodeAgentSettings:
             ),
             interval_seconds=float(os.environ.get("AGENT_BRIDGE_NODE_INTERVAL", "10")),
             request_timeout_seconds=float(os.environ.get("AGENT_BRIDGE_HTTP_TIMEOUT", "30")),
+            max_provider_concurrency=int(
+                os.environ.get("AGENT_BRIDGE_MAX_PROVIDER_CONCURRENCY", "4")
+            ),
             codex_bin=os.environ.get("AGENT_BRIDGE_CODEX_BIN", "codex"),
             claude_bin=os.environ.get("AGENT_BRIDGE_CLAUDE_BIN", "claude"),
             exclusions=ExclusionRules(

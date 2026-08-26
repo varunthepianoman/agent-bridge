@@ -217,6 +217,102 @@ def test_terminal_result_retries_are_idempotent_but_conflicts_are_rejected(tmp_p
     assert wrong_token.status_code == 401
 
 
+def test_claim_skips_busy_conversations_and_full_provider_capacity(tmp_path: Path) -> None:
+    client, store, _repository = _client(tmp_path)
+    credential = "a sufficiently long node credential"
+    client.post(
+        "/api/v1/nodes",
+        json={
+            "node_id": "node-linux",
+            "display_name": "Linux",
+            "platform": "linux",
+            "credential": credential,
+        },
+    )
+    headers = {"Authorization": f"Bearer {credential}"}
+    client.post(
+        "/api/v1/node/heartbeat",
+        json={"node_id": "node-linux", "ttl_seconds": 30},
+        headers=headers,
+    )
+    first = store.queue_command(
+        node_id="node-linux",
+        kind="deliver_turn",
+        payload={"provider": "codex", "provider_thread_id": "thread-a"},
+    )
+    second = store.queue_command(
+        node_id="node-linux",
+        kind="deliver_turn",
+        payload={"provider": "codex", "provider_thread_id": "thread-b"},
+    )
+    native = store.queue_command(
+        node_id="node-linux",
+        kind="open_path",
+        payload={"path": "/tmp"},
+    )
+
+    claim = lambda body: client.post(  # noqa: E731
+        "/api/v1/node/commands/claim",
+        json={"node_id": "node-linux", **body},
+        headers=headers,
+    ).json()["command"]
+
+    claimed_second = claim(
+        {
+            "provider_capacity_available": True,
+            "active_provider_conversations": ["codex:thread-a"],
+        }
+    )
+    assert claimed_second["command_id"] == second["command_id"]
+    claimed_native = claim(
+        {
+            "provider_capacity_available": False,
+            "active_provider_conversations": ["codex:thread-a", "codex:thread-b"],
+        }
+    )
+    assert claimed_native["command_id"] == native["command_id"]
+    claimed_first = claim(
+        {"provider_capacity_available": True, "active_provider_conversations": []}
+    )
+    assert claimed_first["command_id"] == first["command_id"]
+
+
+def test_claimed_command_is_not_executed_again_after_node_restart(tmp_path: Path) -> None:
+    client, store, _repository = _client(tmp_path)
+    credential = "a sufficiently long node credential"
+    client.post(
+        "/api/v1/nodes",
+        json={
+            "node_id": "node-linux",
+            "display_name": "Linux",
+            "platform": "linux",
+            "credential": credential,
+        },
+    )
+    headers = {"Authorization": f"Bearer {credential}"}
+    client.post(
+        "/api/v1/node/heartbeat",
+        json={"node_id": "node-linux", "ttl_seconds": 30},
+        headers=headers,
+    )
+    queued = store.queue_command(
+        node_id="node-linux",
+        kind="deliver_turn",
+        payload={"provider": "codex", "provider_thread_id": "thread-a"},
+    )
+
+    first_agent_claim = client.post(
+        "/api/v1/node/commands/claim", json={"node_id": "node-linux"}, headers=headers
+    ).json()["command"]
+    restarted_agent_claim = client.post(
+        "/api/v1/node/commands/claim", json={"node_id": "node-linux"}, headers=headers
+    ).json()["command"]
+
+    assert first_agent_claim["command_id"] == queued["command_id"]
+    assert restarted_agent_claim is None
+    assert store.get_command(queued["command_id"])["status"] == "claimed"  # type: ignore[index]
+
+
 def test_initial_turn_event_requires_catalog_and_is_idempotent(tmp_path: Path) -> None:
     settings = Settings(
         state_dir=tmp_path,

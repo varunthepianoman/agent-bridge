@@ -113,7 +113,11 @@ def claim_command(
 ) -> dict[str, Any]:
     store = _store(request)
     _authenticate(store, payload.node_id, authorization)
-    command = store.claim_command(payload.node_id)
+    command = store.claim_command(
+        payload.node_id,
+        provider_capacity_available=payload.provider_capacity_available,
+        active_provider_conversations=payload.active_provider_conversations,
+    )
     return {"command": command}
 
 

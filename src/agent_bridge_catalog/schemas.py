@@ -56,6 +56,8 @@ class NodeHeartbeatRequest(Input):
 
 class NodeCommandClaimRequest(Input):
     node_id: str = Field(min_length=1, max_length=160)
+    provider_capacity_available: bool = True
+    active_provider_conversations: list[str] = Field(default_factory=list, max_length=1_000)
 
 
 class NodeCommandResultRequest(Input):

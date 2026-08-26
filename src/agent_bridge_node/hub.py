@@ -55,8 +55,21 @@ class HubClient:
     def heartbeat(self, heartbeat: Mapping[str, Any]) -> Mapping[str, Any]:
         return self._post("/api/v1/node/heartbeat", heartbeat)
 
-    def claim_commands(self, node_id: str) -> list[NodeCommand]:
-        payload = self._post("/api/v1/node/commands/claim", {"node_id": node_id})
+    def claim_commands(
+        self,
+        node_id: str,
+        *,
+        provider_capacity_available: bool = True,
+        active_provider_conversations: Sequence[str] = (),
+    ) -> list[NodeCommand]:
+        payload = self._post(
+            "/api/v1/node/commands/claim",
+            {
+                "node_id": node_id,
+                "provider_capacity_available": provider_capacity_available,
+                "active_provider_conversations": list(active_provider_conversations),
+            },
+        )
         raw_command = payload.get("command")
         if raw_command is None:
             return []

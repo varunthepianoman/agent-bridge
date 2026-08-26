@@ -54,7 +54,11 @@ def test_hub_client_uses_fenced_single_command_contract() -> None:
     assert sync["registration"]["node_id"] == "node-a"
     assert sync["conversations"][0]["environment_id"] == "host"
     claim = _body(requests[1])
-    assert claim == {"node_id": "node-a"}
+    assert claim == {
+        "node_id": "node-a",
+        "provider_capacity_available": True,
+        "active_provider_conversations": [],
+    }
     result = _body(requests[2])
     assert result == {
         "node_id": "node-a",

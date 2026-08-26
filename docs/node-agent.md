@@ -14,12 +14,13 @@ AGENT_BRIDGE_NODE_ID=work-laptop
 AGENT_BRIDGE_ENVIRONMENT_ID=host
 ```
 
-Optional controls include `AGENT_BRIDGE_NODE_INTERVAL` (default 10), provider binary paths,
-transcript sync, and provider/repository/folder/conversation exclusions. Non-loopback Hub URLs must
-use HTTPS.
+Optional controls include `AGENT_BRIDGE_NODE_INTERVAL` (default 10),
+`AGENT_BRIDGE_MAX_PROVIDER_CONCURRENCY` (default 4), provider binary paths, transcript sync, and
+provider/repository/folder/conversation exclusions. Non-loopback Hub URLs must use HTTPS.
 
 Commands are executed only when their `environment_id` matches the daemon. There is no fallback to
-another environment. Codex starts and turns use one supervised `codex app-server` process; Claude
+another environment. Provider commands are serialized per conversation and bounded by the node-wide
+provider concurrency limit. Codex starts and turns use one supervised `codex app-server` process; Claude
 retains its subprocess implementation. The node reports a new Codex task after `thread/start` and
 `turn/start` are accepted, then reports initial-turn completion separately. Native UI and terminal
 launches are always permitted when the host supports them and still pass scheme, platform, path,

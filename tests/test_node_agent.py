@@ -48,7 +48,14 @@ class FakeHub:
         self.environments = environments
         return {}
 
-    def claim_commands(self, node_id: str) -> list[NodeCommand]:
+    def claim_commands(
+        self,
+        node_id: str,
+        *,
+        provider_capacity_available: bool = True,
+        active_provider_conversations: tuple[str, ...] | list[str] = (),
+    ) -> list[NodeCommand]:
+        del provider_capacity_available, active_provider_conversations
         return self.commands
 
     def report_result(self, node_id: str, result: CommandResult) -> dict[str, Any]:
@@ -128,7 +135,13 @@ async def test_cycle_filters_locally_syncs_heartbeat_and_reports_commands() -> N
     assert hub.environments[0]["environment_id"] == "wsl-a"
     assert hub.results[0].command_id == "cmd-1"
     assert hub.beats[0]["node_id"] == "node-a"
-    assert hub.beats[-1]["metadata"] == {"busy": False}
+    assert hub.beats[-1]["metadata"] == {
+        "busy": False,
+        "active_provider_command_count": 0,
+        "waiting_provider_command_count": 0,
+        "active_conversation_ids": [],
+        "provider_command_waits": {},
+    }
 
 
 async def test_daemon_recovers_after_transient_hub_synchronization_failure(monkeypatch) -> None:
@@ -172,7 +185,7 @@ async def test_daemon_recovers_after_transient_hub_synchronization_failure(monke
 async def test_busy_heartbeat_transport_failure_does_not_stop_provider_execution() -> None:
     class BusyHeartbeatHub(FakeHub):
         def heartbeat(self, heartbeat: dict[str, Any]) -> dict[str, Any]:
-            if heartbeat.get("metadata") == {"busy": True}:
+            if heartbeat.get("metadata", {}).get("busy") is True:
                 raise HubTransportError("Hub transport failed (ConnectError)")
             return super().heartbeat(heartbeat)
 
@@ -214,7 +227,7 @@ async def test_busy_heartbeat_transport_failure_does_not_stop_provider_execution
 
 async def test_native_open_is_not_blocked_by_long_provider_turn() -> None:
     class SequentialHub(FakeHub):
-        def claim_commands(self, node_id: str) -> list[NodeCommand]:
+        def claim_commands(self, node_id: str, **_kwargs: Any) -> list[NodeCommand]:
             return [self.commands.pop(0)] if self.commands else []
 
     provider_started = asyncio.Event()
@@ -278,7 +291,7 @@ async def test_completed_result_is_retried_without_rerunning_provider() -> None:
             super().__init__([command])
             self.report_attempts = 0
 
-        def claim_commands(self, node_id: str) -> list[NodeCommand]:
+        def claim_commands(self, node_id: str, **_kwargs: Any) -> list[NodeCommand]:
             commands = self.commands
             self.commands = []
             return commands
@@ -331,7 +344,7 @@ async def test_result_is_flushed_before_turn_event_and_event_retry_does_not_reru
             self.calls: list[str] = []
             self.event_attempts = 0
 
-        def claim_commands(self, node_id: str) -> list[NodeCommand]:
+        def claim_commands(self, node_id: str, **_kwargs: Any) -> list[NodeCommand]:
             commands = self.commands
             self.commands = []
             return commands
@@ -394,3 +407,228 @@ async def test_result_is_flushed_before_turn_event_and_event_retry_does_not_reru
     assert runner.calls == 1
     assert hub.calls == ["result", "event", "event"]
     assert len(hub.results) == len(hub.turn_events) == 1
+
+
+def provider_command(command_id: str, thread_id: str) -> NodeCommand:
+    return NodeCommand(
+        command_id=command_id,
+        claim_token=f"claim-{command_id}",
+        kind="deliver_turn",
+        environment_id="host",
+        conversation_id=f"conv-{thread_id}",
+        provider="codex",
+        provider_thread_id=thread_id,
+        workspace="/tmp",
+        prompt="Continue",
+    )
+
+
+async def test_different_conversations_execute_concurrently() -> None:
+    started = {"a": asyncio.Event(), "b": asyncio.Event()}
+    release = asyncio.Event()
+
+    class BlockingRunner:
+        async def execute(self, request: NodeCommand) -> CommandResult:
+            started[request.provider_thread_id or ""].set()
+            await release.wait()
+            return CommandResult(
+                command_id=request.command_id,
+                claim_token=request.claim_token,
+                status="succeeded",
+            )
+
+    agent = NodeAgent(
+        NodeAgentSettings(hub_url="http://localhost:8000", token="token"),
+        FakeHub(),
+        FakeProvider([]),
+        BlockingRunner(),
+    )
+    tasks = [
+        asyncio.create_task(agent._execute_command(provider_command("cmd-a", "a"))),
+        asyncio.create_task(agent._execute_command(provider_command("cmd-b", "b"))),
+    ]
+
+    await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started.values())), 0.2)
+    assert agent._provider_status()["active_provider_command_count"] == 2
+    release.set()
+    await asyncio.gather(*tasks)
+
+
+async def test_same_conversation_is_fifo_serialized() -> None:
+    order: list[str] = []
+    releases = {command_id: asyncio.Event() for command_id in ("cmd-1", "cmd-2", "cmd-3")}
+
+    class OrderedRunner:
+        async def execute(self, request: NodeCommand) -> CommandResult:
+            order.append(request.command_id)
+            await releases[request.command_id].wait()
+            return CommandResult(
+                command_id=request.command_id,
+                claim_token=request.claim_token,
+                status="succeeded",
+            )
+
+    agent = NodeAgent(
+        NodeAgentSettings(hub_url="http://localhost:8000", token="token"),
+        FakeHub(),
+        FakeProvider([]),
+        OrderedRunner(),
+    )
+    tasks = []
+    for index in range(1, 4):
+        tasks.append(
+            asyncio.create_task(
+                agent._execute_command(provider_command(f"cmd-{index}", "same"))
+            )
+        )
+        await asyncio.sleep(0)
+
+    assert order == ["cmd-1"]
+    assert agent._provider_status()["provider_command_waits"] == {
+        "cmd-2": "conversation_lock",
+        "cmd-3": "conversation_lock",
+    }
+    releases["cmd-1"].set()
+    while order != ["cmd-1", "cmd-2"]:
+        await asyncio.sleep(0)
+    releases["cmd-2"].set()
+    while order != ["cmd-1", "cmd-2", "cmd-3"]:
+        await asyncio.sleep(0)
+    releases["cmd-3"].set()
+    await asyncio.gather(*tasks)
+
+
+async def test_writer_conflict_in_one_conversation_does_not_block_another() -> None:
+    conflict_started = asyncio.Event()
+    other_started = asyncio.Event()
+    release_conflict = asyncio.Event()
+
+    class ConflictRunner:
+        async def execute(self, request: NodeCommand) -> CommandResult:
+            if request.provider_thread_id == "conflict":
+                conflict_started.set()
+                await release_conflict.wait()
+                status = "blocked"
+            else:
+                other_started.set()
+                status = "succeeded"
+            return CommandResult(
+                command_id=request.command_id,
+                claim_token=request.claim_token,
+                status=status,
+            )
+
+    agent = NodeAgent(
+        NodeAgentSettings(hub_url="http://localhost:8000", token="token"),
+        FakeHub(),
+        FakeProvider([]),
+        ConflictRunner(),
+    )
+    conflicted = asyncio.create_task(
+        agent._execute_command(provider_command("cmd-conflict", "conflict"))
+    )
+    await conflict_started.wait()
+    other = asyncio.create_task(agent._execute_command(provider_command("cmd-other", "other")))
+    await asyncio.wait_for(other_started.wait(), 0.2)
+    assert (await other).status == "succeeded"
+    release_conflict.set()
+    assert (await conflicted).status == "blocked"
+
+
+async def test_global_provider_concurrency_limit_and_wait_status() -> None:
+    release = asyncio.Event()
+    two_started = asyncio.Event()
+    active = peak = 0
+
+    class LimitedRunner:
+        async def execute(self, request: NodeCommand) -> CommandResult:
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            if active == 2:
+                two_started.set()
+            await release.wait()
+            active -= 1
+            return CommandResult(
+                command_id=request.command_id,
+                claim_token=request.claim_token,
+                status="succeeded",
+            )
+
+    agent = NodeAgent(
+        NodeAgentSettings(
+            hub_url="http://localhost:8000", token="token", max_provider_concurrency=2
+        ),
+        FakeHub(),
+        FakeProvider([]),
+        LimitedRunner(),
+    )
+    tasks = [
+        asyncio.create_task(agent._execute_command(provider_command(f"cmd-{name}", name)))
+        for name in ("a", "b", "c")
+    ]
+    await asyncio.wait_for(two_started.wait(), 0.2)
+    await asyncio.sleep(0)
+    status = agent._provider_status()
+    assert status["active_provider_command_count"] == 2
+    assert status["waiting_provider_command_count"] == 1
+    assert status["provider_command_waits"] == {"cmd-c": "concurrency_limit"}
+    assert status["active_conversation_ids"] == ["conv-a", "conv-b"]
+    release.set()
+    await asyncio.gather(*tasks)
+    assert peak == 2
+    assert agent._provider_status()["busy"] is False
+
+
+async def test_failure_and_cancellation_release_only_their_provider_slots() -> None:
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    cancel_release = asyncio.Event()
+
+    class ReleasingRunner:
+        async def execute(self, request: NodeCommand) -> CommandResult:
+            if request.command_id == "cmd-fail":
+                raise RuntimeError("expected")
+            if request.command_id == "cmd-cancel":
+                first_started.set()
+                await cancel_release.wait()
+            second_started.set()
+            return CommandResult(
+                command_id=request.command_id,
+                claim_token=request.claim_token,
+                status="succeeded",
+            )
+
+    agent = NodeAgent(
+        NodeAgentSettings(
+            hub_url="http://localhost:8000", token="token", max_provider_concurrency=1
+        ),
+        FakeHub(),
+        FakeProvider([]),
+        ReleasingRunner(),
+    )
+    with pytest.raises(RuntimeError, match="expected"):
+        await agent._execute_command(provider_command("cmd-fail", "fail"))
+
+    cancelled = asyncio.create_task(
+        agent._execute_command(provider_command("cmd-cancel", "cancel"))
+    )
+    await first_started.wait()
+    follower = asyncio.create_task(
+        agent._execute_command(provider_command("cmd-follow", "follow"))
+    )
+    await asyncio.sleep(0)
+    assert not second_started.is_set()
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    await asyncio.wait_for(second_started.wait(), 0.2)
+    assert (await follower).status == "succeeded"
+    assert agent._provider_status()["busy"] is False
+
+    agent._start_command(provider_command("cmd-pre-cancel", "pre-cancel"))
+    pending = next(iter(agent._command_tasks))
+    pending.cancel()
+    await asyncio.gather(pending, return_exceptions=True)
+    await asyncio.sleep(0)
+    assert agent._provider_status()["busy"] is False

@@ -272,7 +272,13 @@ class NodeStore:
             session.commit()
             return self._command_dict(row)
 
-    def claim_command(self, node_id: str) -> dict[str, Any] | None:
+    def claim_command(
+        self,
+        node_id: str,
+        *,
+        provider_capacity_available: bool = True,
+        active_provider_conversations: list[str] | tuple[str, ...] = (),
+    ) -> dict[str, Any] | None:
         now = datetime.now(UTC)
         with self.database.session() as session:
             expired = session.scalars(
@@ -285,7 +291,7 @@ class NodeStore:
             for expired_row in expired:
                 expired_row.status = "expired"
                 expired_row.completed_at = now
-            row = session.scalar(
+            queued = session.scalars(
                 select(NodeCommandRow)
                 .where(
                     NodeCommandRow.node_id == node_id,
@@ -293,7 +299,19 @@ class NodeStore:
                     NodeCommandRow.expires_at > now,
                 )
                 .order_by(NodeCommandRow.created_at)
-                .limit(1)
+            ).all()
+            active = set(active_provider_conversations)
+            row = next(
+                (
+                    candidate
+                    for candidate in queued
+                    if self._command_is_claimable(
+                        candidate,
+                        provider_capacity_available=provider_capacity_available,
+                        active_provider_conversations=active,
+                    )
+                ),
+                None,
             )
             if row is None:
                 session.commit()
@@ -307,6 +325,23 @@ class NodeStore:
             result = self._command_dict(row)
             result["claim_token"] = claim_token
             return result
+
+    @staticmethod
+    def _command_is_claimable(
+        row: NodeCommandRow,
+        *,
+        provider_capacity_available: bool,
+        active_provider_conversations: set[str],
+    ) -> bool:
+        if row.kind not in {"start_conversation", "deliver_turn"}:
+            return True
+        if not provider_capacity_available:
+            return False
+        payload = json.loads(row.payload_json)
+        identity = row.conversation_id
+        if identity is None and payload.get("provider_thread_id"):
+            identity = f"{payload.get('provider', 'codex')}:{payload['provider_thread_id']}"
+        return identity is None or identity not in active_provider_conversations
 
     def complete_command(
         self,
