@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent-bridge")
     parser.add_argument(
         "--api-url",
-        default=os.environ.get("AGENT_BRIDGE_API_URL", "http://127.0.0.1:58081/api/v1"),
+        default=os.environ.get("AGENT_BRIDGE_API_URL", "http://127.0.0.1:58080/api/v1"),
     )
     commands = parser.add_subparsers(dest="command", required=True)
 

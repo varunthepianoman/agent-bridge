@@ -53,7 +53,7 @@ For the current development setup, confirm that the API and NATS are healthy bef
 NUC:
 
 ```bash
-curl --fail --silent --show-error http://127.0.0.1:58081/api/v1/health
+curl --fail --silent --show-error http://127.0.0.1:58080/api/v1/health
 /home/varunkamat/dev/ai-infra/agent-bridge/.venv/bin/agent-bridge nats
 ```
 
@@ -90,7 +90,7 @@ shown only in this response, so copy it immediately without committing it anywhe
 
 ```bash
 curl --fail --silent --show-error \
-  -X POST http://127.0.0.1:58081/api/v1/nodes \
+  -X POST http://127.0.0.1:58080/api/v1/nodes \
   -H 'Content-Type: application/json' \
   -d '{
     "node_id": "windows-nuc",
@@ -224,7 +224,7 @@ Do not continue until this returns healthy API and broker state. If it fails:
 
 - confirm `tailscale status` shows both machines;
 - confirm `tailscale serve status` on the Hub targets port `58081`;
-- confirm the Hub API still answers on `127.0.0.1:58081`;
+- confirm the Hub API still answers on `127.0.0.1:58080`;
 - check the tailnet ACL permits the NUC to reach the Hub on TCP 443.
 
 No Windows inbound firewall exception should be necessary.

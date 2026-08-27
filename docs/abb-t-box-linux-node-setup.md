@@ -96,7 +96,7 @@ systemctl --user --no-pager --full status \
   agent-bridge-web.service
 
 curl --fail --silent --show-error \
-  http://127.0.0.1:58081/api/v1/health
+  http://127.0.0.1:58080/api/v1/health
 
 curl --fail --silent --show-error \
   https://t-vkamat-01-t16g4-ubnt24.tail92f516.ts.net/api/v1/health
@@ -116,7 +116,7 @@ Required health properties are:
 }
 ```
 
-Tailscale Serve should proxy tailnet-only HTTPS to `http://127.0.0.1:58081`. Do not expose NATS
+Tailscale Serve should proxy tailnet-only HTTPS to `http://127.0.0.1:58080`. Do not expose NATS
 ports `4222` or `8222` to the network.
 
 ### B2. Decide initial catalog policy
@@ -129,7 +129,7 @@ curl --fail --silent --show-error \
   -X PATCH \
   -H 'Content-Type: application/json' \
   -d '{"auto_add_new_chats":false}' \
-  http://127.0.0.1:58081/api/v1/settings
+  http://127.0.0.1:58080/api/v1/settings
 ```
 
 The T-Box configuration below also starts with transcript synchronization disabled. Conversation
@@ -147,7 +147,7 @@ If it is new, provision it through the Hub loopback API:
 
 ```bash
 curl --fail --silent --show-error \
-  -X POST http://127.0.0.1:58081/api/v1/nodes \
+  -X POST http://127.0.0.1:58080/api/v1/nodes \
   -H 'Content-Type: application/json' \
   -d '{
     "node_id": "abb-t-box",

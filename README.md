@@ -53,7 +53,7 @@ you need to resume the exact local Claude Code session.
 
 ## Interfaces
 
-- Web/OpenAPI: `http://127.0.0.1:58081/docs`
+- Web/OpenAPI: `http://127.0.0.1:58080/docs`
 - CLI: `agent-bridge --help`
 - Local stdio MCP: `agent-bridge-mcp`
 - Remote node: `agent-bridge-node` (`--once` is suitable for provider hooks)

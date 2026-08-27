@@ -14,7 +14,7 @@ mcp = FastMCP("Agent Bridge")
 def _request(
     method: str, path: str, *, timeout: float = 30, **kwargs: Any
 ) -> Any:
-    root = os.environ.get("AGENT_BRIDGE_API_URL", "http://127.0.0.1:58081/api/v1")
+    root = os.environ.get("AGENT_BRIDGE_API_URL", "http://127.0.0.1:58080/api/v1")
     with httpx.Client(base_url=root.rstrip("/"), timeout=timeout) as client:
         response = client.request(method, path, **kwargs)
         response.raise_for_status()
