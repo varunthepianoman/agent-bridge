@@ -210,6 +210,10 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
     if command == "message":
         if args.wait_for is not None and args.from_chat is None:
             raise ValueError("--from-chat is required with --wait-for")
+        if args.wait_for is not None and (args.chat is None or args.room is not None):
+            raise ValueError("--wait-for requires a direct --chat target")
+        if args.wait_for is not None and not 0 <= args.timeout_seconds <= 3600:
+            raise ValueError("--timeout must be between 0 and 3600 seconds")
         request_acknowledgement = args.request_ack or args.wait_for in {
             "acknowledged",
             "terminal",

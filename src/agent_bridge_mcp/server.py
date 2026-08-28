@@ -58,6 +58,13 @@ def send_message(
     """Put durable mail in one inbox, optionally waiting for a direct-message receipt."""
     if wait_for not in {None, "claimed", "acknowledged", "terminal"}:
         raise ValueError("wait_for must be claimed, acknowledged, terminal, or null")
+    if wait_for is not None:
+        if source_conversation_id is None:
+            raise ValueError("source_conversation_id is required when waiting for a receipt")
+        if target_conversation_id is None or room_id is not None:
+            raise ValueError("receipt waits require a direct conversation target")
+        if not 0 <= timeout_seconds <= 3600:
+            raise ValueError("timeout_seconds must be between 0 and 3600")
     request_acknowledgement = acknowledgement_requested or wait_for in {
         "acknowledged",
         "terminal",
@@ -78,8 +85,6 @@ def send_message(
     )
     if wait_for is None:
         return sent
-    if source_conversation_id is None:
-        raise ValueError("source_conversation_id is required when waiting for a receipt")
     return _request(
         "POST",
         f"/messages/{sent['message_id']}/wait-receipt",

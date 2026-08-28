@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from io import StringIO
 from typing import Any
 
 import httpx
@@ -55,6 +56,34 @@ def test_cli_send_can_wait_for_acknowledgement() -> None:
     }
 
 
+def test_cli_rejects_invalid_wait_before_sending() -> None:
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(201, json={"message_id": "unexpected"})
+
+    stderr = StringIO()
+    status = run(
+        [
+            "message",
+            "--room",
+            "room-1",
+            "--from-chat",
+            "source",
+            "--wait-for",
+            "claimed",
+            "room message",
+        ],
+        transport=httpx.MockTransport(handle),
+        stderr=stderr,
+    )
+
+    assert status == 1
+    assert "direct --chat" in stderr.getvalue()
+    assert requests == []
+
+
 def test_mcp_send_waits_with_dynamic_timeout(monkeypatch: Any) -> None:
     calls: list[tuple[str, str, dict[str, Any]]] = []
 
@@ -78,6 +107,30 @@ def test_mcp_send_waits_with_dynamic_timeout(monkeypatch: Any) -> None:
     assert calls[0][2]["json"]["acknowledgement_requested"] is True
     assert calls[1][1] == "/messages/message-2/wait-receipt"
     assert calls[1][2]["timeout"] == 3610
+
+
+def test_mcp_rejects_invalid_wait_before_sending(monkeypatch: Any) -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append((method, path, kwargs))
+        return {"message_id": "unexpected"}
+
+    monkeypatch.setattr(server, "_request", request)
+
+    try:
+        server.send_message(
+            "room message",
+            room_id="room-1",
+            source_conversation_id="source",
+            wait_for="claimed",
+        )
+    except ValueError as exc:
+        assert "direct conversation" in str(exc)
+    else:
+        raise AssertionError("room receipt wait should fail")
+
+    assert calls == []
 
 
 def test_mcp_receipt_tools_use_receipt_endpoints(monkeypatch: Any) -> None:
