@@ -67,16 +67,54 @@ export interface BridgeMessage {
   body: string;
   state: string;
   transport_state?: "queued" | "published" | "delivered" | "failed";
-  processing_state?: "pending" | "received" | "succeeded" | "blocked" | "failed";
+  processing_state?:
+    | "pending"
+    | "received"
+    | "claimed"
+    | "acknowledged"
+    | "succeeded"
+    | "blocked"
+    | "failed";
+  acknowledgement_requested?: boolean;
   processing_detail?: string;
   outcome_detail?: string;
   received_at?: string;
+  claimed_at?: string;
+  acknowledged_at?: string;
+  acknowledgement_detail?: string;
   completed_at?: string;
   outcome_at?: string;
+  attempt?: number;
+  revision?: number;
   reply_message_id?: string;
   subject?: string;
   error?: string;
   created_at: string;
+}
+
+export type ReceiptMilestone = "claimed" | "acknowledged" | "terminal";
+
+export interface MessageReceiptStatus {
+  status?: "reached" | "timeout";
+  message_id: string;
+  acknowledgement_requested?: boolean;
+  transport_state?: BridgeMessage["transport_state"];
+  processing_state?: BridgeMessage["processing_state"];
+  attempt?: number;
+  revision?: number;
+  created_at?: string;
+  published_at?: string;
+  delivered_at?: string;
+  received_at?: string;
+  claimed_at?: string;
+  acknowledged_at?: string;
+  acknowledgement_detail?: string;
+  completed_at?: string;
+  outcome_at?: string;
+  outcome?: "succeeded" | "blocked" | "failed";
+  outcome_detail?: string;
+  recipient_listener?: MailboxListener | null;
+  recipient_node_reachable?: boolean;
 }
 
 export interface MailboxListener {

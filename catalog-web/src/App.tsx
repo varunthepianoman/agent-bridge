@@ -43,7 +43,7 @@ import {
   stopMailboxListener,
   updateCatalogSettings,
 } from "./api";
-import type { MailboxSnapshot } from "./types";
+import type { BridgeMessage, MailboxSnapshot } from "./types";
 
 type Section = "conversations" | "attention" | "messages" | "rooms" | "nodes" | "nats";
 
@@ -187,7 +187,29 @@ function AttentionView() {
 
 function MessagesView() {
   const query = useQuery({ queryKey: ["messages"], queryFn: coreMessages, refetchInterval: 5_000 });
-  return <><PageTitle title="Message history" subtitle="Durable mailbox traffic with separate transport and processing outcomes." /><section className="panel table-panel"><table><thead><tr><th>Time</th><th>Route</th><th>Message</th><th>Correlation</th><th>Transport</th><th>Processing</th></tr></thead><tbody>{query.data?.items.map((item) => <tr key={item.message_id}><td>{new Date(item.created_at).toLocaleString()}</td><td>{item.target_conversation_id || item.room_id}</td><td title={item.outcome_detail || item.processing_detail}>{item.body}</td><td className="mono">{item.correlation_id}</td><td><span className={`pill ${item.transport_state ?? item.state}`}>{item.transport_state ?? item.state}</span></td><td><span className={`pill ${item.processing_state ?? "pending"}`}>{item.processing_state ?? "pending"}</span>{item.reply_message_id && <small className="reply-link">reply {item.reply_message_id}</small>}</td></tr>)}</tbody></table></section></>;
+  return <><PageTitle title="Message history" subtitle="Durable mailbox traffic with distinct transport, claim, acknowledgment, and terminal outcomes." /><section className="panel table-panel"><table><thead><tr><th>Time</th><th>Route</th><th>Message</th><th>Correlation</th><th>Transport</th><th>Receipt</th><th>Processing</th></tr></thead><tbody>{query.data?.items.map((item) => <tr key={item.message_id}><td>{new Date(item.created_at).toLocaleString()}</td><td>{item.target_conversation_id || item.room_id}</td><td title={item.outcome_detail || item.processing_detail}>{item.body}</td><td className="mono">{item.correlation_id}</td><td><span className={`pill ${item.transport_state ?? item.state}`}>{item.transport_state ?? item.state}</span></td><td><ReceiptSummary item={item} /></td><td><span className={`pill ${publicProcessingState(item.processing_state)}`}>{publicProcessingState(item.processing_state)}</span>{(item.outcome_detail || item.processing_detail) && <small className="receipt-detail">{item.outcome_detail || item.processing_detail}</small>}{item.reply_message_id && <small className="reply-link">reply {item.reply_message_id}</small>}</td></tr>)}</tbody></table></section></>;
+}
+
+function ReceiptSummary({ item }: { item: BridgeMessage }) {
+  const claimedAt = item.claimed_at ?? item.received_at;
+  const status = item.acknowledged_at
+    ? "acknowledged"
+    : claimedAt
+      ? "claimed"
+      : item.acknowledgement_requested
+        ? "requested"
+        : "not requested";
+  const timestamp = item.acknowledged_at ?? claimedAt;
+  return <div className="receipt-summary">
+    <span className={`pill ${status.replace(" ", "-")}`}>{status}</span>
+    {(item.attempt !== undefined || item.revision !== undefined) && <small>attempt {item.attempt ?? 1} · rev {item.revision ?? 0}</small>}
+    {timestamp && <small>{new Date(timestamp).toLocaleString()}</small>}
+    {item.acknowledgement_detail && <small className="receipt-detail">{item.acknowledgement_detail}</small>}
+  </div>;
+}
+
+function publicProcessingState(state: BridgeMessage["processing_state"]): string {
+  return state === "received" ? "claimed" : state ?? "pending";
 }
 
 function RoomsView() {
@@ -218,7 +240,7 @@ function MailboxPanel({
     : "offline";
   return <section className="mailbox-panel">
     <header><div><strong><Inbox size={16} /> Mailbox</strong><small>{snapshot?.total ?? 0} messages · processing is agent-controlled</small></div><div className={`listener-state ${listenerState}`}><span className={listener ? "online-dot" : "offline-dot"} /><span>Listener {listenerState}</span>{listener && <button disabled={stopping} onClick={onStop}><CircleStop size={14} /> {stopping ? "Stopping…" : "Stop"}</button>}</div></header>
-    {loading ? <p className="muted">Loading mailbox…</p> : snapshot?.items.length ? <div className="mailbox-items">{snapshot.items.slice(0, 8).map((item) => <article key={item.message_id}><div><strong>{item.source_conversation_id || item.actor_kind}</strong><span className={`pill ${item.processing_state ?? "pending"}`}>{item.processing_state ?? "pending"}</span></div><p>{item.body}</p><small>{new Date(item.created_at).toLocaleString()} · {item.operation} · {item.correlation_id}</small>{(item.outcome_detail || item.processing_detail) && <em>{item.outcome_detail || item.processing_detail}</em>}{item.processing_state && item.processing_state !== "pending" && <button disabled={requeueing} onClick={() => onRequeue(item.message_id)}><RotateCcw size={13} /> Requeue</button>}</article>)}</div> : <p className="muted">No mailbox messages yet.</p>}
+    {loading ? <p className="muted">Loading mailbox…</p> : snapshot?.items.length ? <div className="mailbox-items">{snapshot.items.slice(0, 8).map((item) => <article key={item.message_id}><div><strong>{item.source_conversation_id || item.actor_kind}</strong><span className={`pill ${publicProcessingState(item.processing_state)}`}>{publicProcessingState(item.processing_state)}</span></div><p>{item.body}</p><small>{new Date(item.created_at).toLocaleString()} · {item.operation} · {item.correlation_id}</small><small>{item.acknowledgement_requested ? "ack requested" : "no ack requested"} · attempt {item.attempt ?? 1} · rev {item.revision ?? 0}</small>{item.acknowledged_at && <small>Acknowledged {new Date(item.acknowledged_at).toLocaleString()}</small>}{(item.acknowledgement_detail || item.outcome_detail || item.processing_detail) && <em>{item.acknowledgement_detail || item.outcome_detail || item.processing_detail}</em>}{item.processing_state && item.processing_state !== "pending" && <button disabled={requeueing} onClick={() => onRequeue(item.message_id)}><RotateCcw size={13} /> Requeue</button>}</article>)}</div> : <p className="muted">No mailbox messages yet.</p>}
   </section>;
 }
 

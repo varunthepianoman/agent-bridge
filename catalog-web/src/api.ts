@@ -7,8 +7,10 @@ import type {
   CatalogSettings,
   CoreConversation,
   MailboxSnapshot,
+  MessageReceiptStatus,
   NatsEvent,
   OperationResponse,
+  ReceiptMilestone,
 } from "./types";
 
 const API_ROOT = import.meta.env.VITE_API_BASE ?? "/api/v1";
@@ -75,10 +77,42 @@ export function updateCatalogSettings(input: CatalogSettings): Promise<CatalogSe
 
 export function sendCoreMessage(input: {
   body: string;
+  source_conversation_id?: string;
   target_conversation_id?: string;
   room_id?: string;
+  acknowledgement_requested?: boolean;
 }): Promise<BridgeMessage> {
   return request("/messages", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function coreMessage(messageId: string): Promise<MessageReceiptStatus> {
+  return request(`/messages/${encodeURIComponent(messageId)}`);
+}
+
+export function acknowledgeMailboxMessage(
+  conversationId: string,
+  messageId: string,
+  detail?: string,
+): Promise<MessageReceiptStatus> {
+  return request(`/messages/${encodeURIComponent(messageId)}/acknowledge`, {
+    method: "POST",
+    body: JSON.stringify({ conversation_id: conversationId, ...(detail ? { detail } : {}) }),
+  });
+}
+
+export function waitForMessageReceipt(
+  sourceConversationId: string,
+  messageId: string,
+  input: {
+    until: ReceiptMilestone;
+    timeout_seconds?: number;
+    after_revision?: number;
+  },
+): Promise<MessageReceiptStatus> {
+  return request(`/messages/${encodeURIComponent(messageId)}/wait-receipt`, {
+    method: "POST",
+    body: JSON.stringify({ source_conversation_id: sourceConversationId, ...input }),
+  });
 }
 
 export function sendProviderTurn(
