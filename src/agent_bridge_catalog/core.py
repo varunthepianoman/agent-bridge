@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
@@ -454,13 +455,18 @@ class MailboxStore:
                         fencing_token=fencing_token,
                         received_at=now,
                         updated_at=now,
-                    )
+                        revision=MailboxDeliveryRow.revision + 1,
+                    ),
+                    execution_options={"synchronize_session": False},
                 )
                 if cast(Any, result).rowcount != 1:
                     continue
                 candidate.state = "received"
                 candidate.listener_id = listener_id
                 candidate.fencing_token = fencing_token
+                candidate.received_at = now
+                candidate.updated_at = now
+                candidate.revision += 1
                 self._add_event(
                     session,
                     candidate,
@@ -474,6 +480,72 @@ class MailboxStore:
                 claimed.append(candidate.message_id)
             session.commit()
             return [self._delivery(session, message_id, conversation_id) for message_id in claimed]
+
+    def acknowledge(
+        self,
+        message_id: str,
+        conversation_id: str,
+        *,
+        detail: str | None = None,
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        with self.database.session() as session:
+            row = self._require_delivery(session, message_id, conversation_id)
+            message = session.get(ConversationMessageRow, message_id)
+            assert message is not None
+            if not message.acknowledgement_requested:
+                raise ValueError("mailbox acknowledgement was not requested")
+            if row.acknowledged_at is not None:
+                return self._delivery(session, message_id, conversation_id)
+            if row.state != "received":
+                raise ValueError("only a claimed mailbox delivery can be acknowledged")
+
+            result = session.execute(
+                update(MailboxDeliveryRow)
+                .where(
+                    MailboxDeliveryRow.message_id == message_id,
+                    MailboxDeliveryRow.recipient_conversation_id == conversation_id,
+                    MailboxDeliveryRow.state == "received",
+                    MailboxDeliveryRow.acknowledged_at.is_(None),
+                )
+                .values(
+                    acknowledged_at=now,
+                    acknowledgement_detail=detail,
+                    acknowledgement_attention_emitted_at=now,
+                    updated_at=now,
+                    revision=MailboxDeliveryRow.revision + 1,
+                )
+            )
+            if cast(Any, result).rowcount != 1:
+                session.rollback()
+                current = self._require_delivery(session, message_id, conversation_id)
+                if current.acknowledged_at is not None:
+                    return self._delivery(session, message_id, conversation_id)
+                raise ValueError("mailbox delivery could not be acknowledged")
+            session.expire_all()
+            row = self._require_delivery(session, message_id, conversation_id)
+            self._add_event(
+                session,
+                row,
+                event_kind="acknowledged",
+                from_state="received",
+                to_state="received",
+                listener_id=row.listener_id,
+                fencing_token=row.fencing_token,
+                detail=detail,
+                now=now,
+            )
+            self._add_receipt_attention(
+                session,
+                message,
+                row,
+                kind="mailbox_acknowledged",
+                title="Mailbox message acknowledged",
+                detail=detail or "The recipient acknowledged the message.",
+                now=now,
+            )
+            session.commit()
+            return self._delivery(session, message_id, conversation_id)
 
     def complete(
         self,
@@ -500,11 +572,44 @@ class MailboxStore:
                 raise ValueError("only a received mailbox delivery can be completed")
             # Completion validates the durable claim, not the live lease: the listener wait may
             # legitimately have ended while the agent processes the received batch.
-            row.state = outcome
-            row.detail = detail
-            row.reply_message_id = reply_message_id
-            row.completed_at = now
-            row.updated_at = now
+            message = session.get(ConversationMessageRow, message_id)
+            assert message is not None
+            result = session.execute(
+                update(MailboxDeliveryRow)
+                .where(
+                    MailboxDeliveryRow.message_id == message_id,
+                    MailboxDeliveryRow.recipient_conversation_id == conversation_id,
+                    MailboxDeliveryRow.state == "received",
+                    MailboxDeliveryRow.listener_id == listener_id,
+                    MailboxDeliveryRow.fencing_token == fencing_token,
+                )
+                .values(
+                    state=outcome,
+                    detail=detail,
+                    reply_message_id=reply_message_id,
+                    acknowledged_at=row.acknowledged_at or now,
+                    completed_at=now,
+                    terminal_attention_emitted_at=(
+                        now
+                        if message.acknowledgement_requested
+                        else row.terminal_attention_emitted_at
+                    ),
+                    updated_at=now,
+                    revision=MailboxDeliveryRow.revision + 1,
+                ),
+                execution_options={"synchronize_session": False},
+            )
+            if cast(Any, result).rowcount != 1:
+                session.rollback()
+                current = self._require_delivery(session, message_id, conversation_id)
+                self._require_claim(current, listener_id, fencing_token)
+                if current.state in _MAILBOX_TERMINAL_STATES:
+                    if current.state != outcome or current.reply_message_id != reply_message_id:
+                        raise ValueError("mailbox delivery already has a conflicting outcome")
+                    return self._delivery(session, message_id, conversation_id)
+                raise ValueError("mailbox delivery could not be completed")
+            session.expire_all()
+            row = self._require_delivery(session, message_id, conversation_id)
             self._add_event(
                 session,
                 row,
@@ -516,6 +621,16 @@ class MailboxStore:
                 detail=detail,
                 now=now,
             )
+            if message.acknowledgement_requested:
+                self._add_receipt_attention(
+                    session,
+                    message,
+                    row,
+                    kind="mailbox_terminal",
+                    title=f"Mailbox message {outcome}",
+                    detail=detail or f"The recipient reported outcome: {outcome}.",
+                    now=now,
+                )
             session.commit()
             return self._delivery(session, message_id, conversation_id)
 
@@ -534,8 +649,14 @@ class MailboxStore:
             row.detail = detail
             row.reply_message_id = None
             row.received_at = None
+            row.acknowledged_at = None
+            row.acknowledgement_detail = None
             row.completed_at = None
             row.attention_emitted_at = None
+            row.acknowledgement_attention_emitted_at = None
+            row.terminal_attention_emitted_at = None
+            row.attempt += 1
+            row.revision += 1
             row.updated_at = now
             self._add_event(
                 session,
@@ -810,7 +931,7 @@ class MailboxStore:
             "message_id": delivery.message_id,
             "recipient_conversation_id": delivery.recipient_conversation_id,
             "state": delivery.state,
-            "processing_state": delivery.state,
+            "processing_state": "claimed" if delivery.state == "received" else delivery.state,
             "listener_id": delivery.listener_id,
             "fencing_token": delivery.fencing_token,
             "detail": delivery.detail,
@@ -821,9 +942,18 @@ class MailboxStore:
             "delivery_created_at": _iso(delivery.created_at),
             "updated_at": _iso(delivery.updated_at),
             "received_at": _iso(delivery.received_at),
+            "claimed_at": _iso(delivery.received_at),
+            "acknowledged_at": _iso(delivery.acknowledged_at),
+            "acknowledgement_detail": delivery.acknowledgement_detail,
+            "attempt": delivery.attempt,
+            "revision": delivery.revision,
             "completed_at": _iso(delivery.completed_at),
             "outcome_at": _iso(delivery.completed_at),
             "attention_emitted_at": _iso(delivery.attention_emitted_at),
+            "acknowledgement_attention_emitted_at": _iso(
+                delivery.acknowledgement_attention_emitted_at
+            ),
+            "terminal_attention_emitted_at": _iso(delivery.terminal_attention_emitted_at),
             "correlation_id": message.correlation_id,
             "causation_id": message.causation_id,
             "source_conversation_id": message.source_conversation_id,
@@ -832,8 +962,43 @@ class MailboxStore:
             "operation": message.operation,
             "body": message.body,
             "delivery_strategy": message.delivery_strategy,
+            "acknowledgement_requested": message.acknowledgement_requested,
             "message_created_at": _iso(message.created_at),
         }
+
+    @staticmethod
+    def _add_receipt_attention(
+        session: Any,
+        message: ConversationMessageRow,
+        delivery: MailboxDeliveryRow,
+        *,
+        kind: str,
+        title: str,
+        detail: str,
+        now: datetime,
+    ) -> None:
+        source = message.source_conversation_id
+        if source is None:
+            raise ValueError("receipt message has no source conversation")
+        identity = hashlib.sha256(
+            (
+                f"{message.message_id}\0{delivery.recipient_conversation_id}\0"
+                f"{delivery.attempt}\0{kind}"
+            ).encode()
+        ).hexdigest()[:40]
+        session.add(
+            AttentionRow(
+                attention_id=f"attention-receipt-{identity}",
+                conversation_id=source,
+                correlation_id=message.correlation_id,
+                category="update",
+                kind=kind,
+                title=title,
+                detail=detail,
+                acknowledged=False,
+                created_at=now,
+            )
+        )
 
     @staticmethod
     def _listener_dict(row: MailboxListenerRow) -> dict[str, Any]:
@@ -913,6 +1078,7 @@ class MessageStore:
         operation: str,
         correlation_id: str | None,
         causation_id: str | None,
+        acknowledgement_requested: bool = False,
         delivery_strategy: DeliveryStrategy = "mailbox",
     ) -> dict[str, Any]:
         if bool(target_conversation_id) == bool(room_id):
@@ -921,6 +1087,16 @@ class MessageStore:
             raise ValueError("unsupported message operation")
         if delivery_strategy not in {"mailbox", "queue", "steer-or-queue"}:
             raise ValueError("unsupported delivery strategy")
+        if acknowledgement_requested:
+            if room_id is not None or target_conversation_id is None:
+                raise ValueError("acknowledgement receipts require a direct conversation target")
+            if delivery_strategy != "mailbox":
+                raise ValueError("acknowledgement receipts require mailbox delivery")
+            if source_conversation_id is None:
+                raise ValueError("acknowledgement receipts require a source conversation")
+            with self.database.session() as session:
+                if session.get(ConversationRow, source_conversation_id) is None:
+                    raise ValueError("source conversation not found")
         if message_id:
             existing = self.get(message_id)
             if existing is not None:
@@ -933,6 +1109,7 @@ class MessageStore:
                     "operation": operation,
                     "correlation_id": correlation_id,
                     "causation_id": causation_id,
+                    "acknowledgement_requested": acknowledgement_requested,
                 }
                 if any(existing[key] != value for key, value in expected.items()):
                     raise ValueError("message id already exists with different content")
@@ -951,7 +1128,12 @@ class MessageStore:
             kind=MessageKind.REQUEST if operation == "request" else MessageKind.MESSAGE,
             sender=sender,
             destination=EndpointRef(kind=target_kind, id=target_id),
-            body={"text": body, "operation": operation, "actor_kind": actor_kind},
+            body={
+                "text": body,
+                "operation": operation,
+                "actor_kind": actor_kind,
+                "acknowledgement_requested": acknowledgement_requested,
+            },
             correlation_id=correlation,
             causation_id=causation_id,
             delivery=DeliveryPolicy(strategy=delivery_strategy),
@@ -967,6 +1149,7 @@ class MessageStore:
             operation=operation,
             body=body,
             delivery_strategy=delivery_strategy,
+            acknowledgement_requested=acknowledgement_requested,
             state="queued",
             created_at=now,
             updated_at=now,
@@ -1037,6 +1220,15 @@ class MessageStore:
         body = envelope.body.get("text", "")
         operation = envelope.body.get("operation", "message")
         actor_kind = envelope.body.get("actor_kind", "agent")
+        acknowledgement_requested = envelope.body.get("acknowledgement_requested", False)
+        if not isinstance(acknowledgement_requested, bool):
+            raise ValueError("acknowledgement_requested must be a boolean")
+        if acknowledgement_requested and (
+            room_id is not None
+            or target_conversation_id is None
+            or envelope.sender.kind != EndpointKind.CONVERSATION
+        ):
+            raise ValueError("acknowledgement receipts require direct conversations")
         now = datetime.now(UTC)
         row = ConversationMessageRow(
             message_id=envelope.message_id,
@@ -1051,6 +1243,7 @@ class MessageStore:
             operation=str(operation),
             body=str(body),
             delivery_strategy=envelope.delivery.strategy,
+            acknowledgement_requested=acknowledgement_requested,
             state="received",
             subject=subject,
             created_at=envelope.created_at,
@@ -1120,6 +1313,7 @@ class MessageStore:
             "operation": row.operation,
             "body": row.body,
             "delivery_strategy": row.delivery_strategy,
+            "acknowledgement_requested": row.acknowledgement_requested,
             "delivery_route": row.delivery_route,
             "state": row.state,
             "transport_state": row.state,
