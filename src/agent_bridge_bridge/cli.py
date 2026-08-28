@@ -93,12 +93,12 @@ def build_parser() -> argparse.ArgumentParser:
     wait_receipt = commands.add_parser(
         "wait-receipt", help="wait in the foreground for a direct-message receipt"
     )
+    wait_receipt.add_argument("source_conversation_id")
     wait_receipt.add_argument("message_id")
-    wait_receipt.add_argument("--from-chat", required=True)
     wait_receipt.add_argument(
         "--until", choices=("claimed", "acknowledged", "terminal"), default="acknowledged"
     )
-    wait_receipt.add_argument("--max-wait-seconds", type=float, default=3600.0)
+    wait_receipt.add_argument("--timeout", dest="timeout_seconds", type=float, default=3600.0)
     wait_receipt.add_argument("--after-revision", type=int)
 
     message_status = commands.add_parser(
@@ -279,13 +279,13 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
             f"/messages/{args.message_id}/wait-receipt",
             json=_without_none(
                 {
-                    "source_conversation_id": args.from_chat,
+                    "source_conversation_id": args.source_conversation_id,
                     "until": args.until,
-                    "timeout_seconds": args.max_wait_seconds,
+                    "timeout_seconds": args.timeout_seconds,
                     "after_revision": args.after_revision,
                 }
             ),
-            timeout=max(30, args.max_wait_seconds + 10),
+            timeout=max(30, args.timeout_seconds + 10),
         )
     if command == "message-status":
         return client.get(f"/messages/{args.message_id}")
