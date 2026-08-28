@@ -150,6 +150,7 @@ class ConversationMessageRow(Base):
     operation: Mapped[str] = mapped_column(String(40), default="message", index=True)
     body: Mapped[str] = mapped_column(Text)
     delivery_strategy: Mapped[str] = mapped_column(String(40), default="queue", index=True)
+    acknowledgement_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     delivery_route: Mapped[str | None] = mapped_column(String(40), index=True)
     state: Mapped[str] = mapped_column(String(40), default="queued", index=True)
     subject: Mapped[str | None] = mapped_column(String(320), index=True)
@@ -177,9 +178,19 @@ class MailboxDeliveryRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledgement_detail: Mapped[str | None] = mapped_column(Text)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    revision: Mapped[int] = mapped_column(Integer, default=0)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     attention_emitted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), index=True
+    )
+    acknowledgement_attention_emitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    terminal_attention_emitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
     )
 
 
