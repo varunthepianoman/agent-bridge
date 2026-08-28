@@ -67,7 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
     inbox = commands.add_parser("inbox", help="list durable mail for one chat")
     inbox.add_argument("conversation_id")
     inbox.add_argument(
-        "--state", choices=("pending", "received", "succeeded", "blocked", "failed")
+        "--state",
+        choices=("pending", "claimed", "received", "succeeded", "blocked", "failed"),
     )
     inbox.add_argument("--limit", type=int, default=200)
 

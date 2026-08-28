@@ -936,6 +936,7 @@ class MailboxStore:
             "fencing_token": delivery.fencing_token,
             "detail": delivery.detail,
             "processing_detail": delivery.detail,
+            "outcome": delivery.state if delivery.state in _MAILBOX_TERMINAL_STATES else None,
             "outcome_detail": delivery.detail,
             "reply_message_id": delivery.reply_message_id,
             "created_at": _iso(message.created_at),

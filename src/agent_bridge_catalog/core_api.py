@@ -184,6 +184,7 @@ def _message_dict(request: Request, item: dict[str, Any]) -> dict[str, Any]:
         for key in (
             "processing_state",
             "processing_detail",
+            "outcome",
             "outcome_detail",
             "received_at",
             "claimed_at",

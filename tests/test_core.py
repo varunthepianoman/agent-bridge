@@ -333,6 +333,10 @@ def test_requested_acknowledgement_and_receipt_wait_lifecycle(tmp_path: Path) ->
         claimed = claimed_batch["items"][0]
         assert claimed["claimed_at"] == claimed["received_at"]
         assert claimed["attempt"] == 1
+        claimed_inbox = client.get(
+            f"/api/v1/mailbox/{target}", params={"state": "claimed"}
+        ).json()
+        assert [item["message_id"] for item in claimed_inbox["items"]] == [sent["message_id"]]
 
         claimed_receipt = client.post(
             f"/api/v1/messages/{sent['message_id']}/wait-receipt",
