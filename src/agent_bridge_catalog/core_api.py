@@ -105,6 +105,7 @@ class MessageCreate(Input):
     )
     correlation_id: str | None = None
     causation_id: str | None = None
+    acknowledgement_requested: bool = False
 
 
 class MailboxWait(Input):
@@ -122,6 +123,18 @@ class MessageComplete(Input):
 class MessageRequeue(Input):
     conversation_id: str = Field(min_length=1)
     detail: str | None = Field(default=None, max_length=20_000)
+
+
+class MessageAcknowledge(Input):
+    conversation_id: str = Field(min_length=1)
+    detail: str | None = Field(default=None, max_length=20_000)
+
+
+class ReceiptWait(Input):
+    source_conversation_id: str = Field(min_length=1)
+    until: Literal["claimed", "acknowledged", "terminal"] = "acknowledged"
+    timeout_seconds: float = Field(default=3600, ge=0, le=3600)
+    after_revision: int | None = Field(default=None, ge=0)
 
 
 def _repository(request: Request) -> CatalogRepository:
@@ -173,12 +186,62 @@ def _message_dict(request: Request, item: dict[str, Any]) -> dict[str, Any]:
             "processing_detail",
             "outcome_detail",
             "received_at",
+            "claimed_at",
+            "acknowledged_at",
+            "acknowledgement_detail",
+            "attempt",
+            "revision",
             "completed_at",
             "outcome_at",
             "reply_message_id",
         ):
             result[key] = deliveries[0].get(key)
     return result
+
+
+def _receipt_reached(
+    delivery: dict[str, Any] | None,
+    *,
+    milestone: str,
+    after_revision: int | None,
+) -> bool:
+    if delivery is None:
+        return False
+    revision = int(delivery.get("revision") or 0)
+    if after_revision is not None and revision <= after_revision:
+        return False
+    if milestone == "claimed":
+        return delivery.get("claimed_at") is not None or delivery.get("received_at") is not None
+    if milestone == "acknowledged":
+        return delivery.get("acknowledged_at") is not None
+    return delivery.get("state") in {"succeeded", "blocked", "failed"}
+
+
+def _receipt_snapshot(
+    request: Request,
+    message: dict[str, Any],
+    *,
+    status_value: Literal["reached", "timeout"],
+    waited_for: str,
+) -> dict[str, Any]:
+    target_id = message.get("target_conversation_id")
+    delivery = (
+        _mailbox(request).get_delivery(message["message_id"], str(target_id))
+        if target_id
+        else None
+    )
+    target = _repository(request).get(str(target_id)) if target_id else None
+    target_projection = _conversation_dict(request, target) if target is not None else {}
+    return {
+        "status": status_value,
+        "waited_for": waited_for,
+        "message": _message_dict(request, message),
+        "receipt": delivery,
+        "recipient_listener": _mailbox(request).get_listener(str(target_id))
+        if target_id
+        else None,
+        "recipient_node_reachable": target_projection.get("node_reachable"),
+    }
 
 
 @router.get("/health")
@@ -672,6 +735,19 @@ def list_messages(request: Request, correlation_id: str | None = None) -> dict[s
 
 @router.post("/messages", status_code=201)
 async def send_message(payload: MessageCreate, request: Request) -> dict[str, Any]:
+    if payload.acknowledgement_requested:
+        if payload.room_id is not None or payload.target_conversation_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="acknowledgement receipts require a direct conversation target",
+            )
+        if payload.source_conversation_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="acknowledgement receipts require a source conversation",
+            )
+        _conversation(request, payload.source_conversation_id)
+        _conversation(request, payload.target_conversation_id)
     try:
         return await _messages(request).send(
             **payload.model_dump(),
@@ -693,14 +769,15 @@ def get_message(message_id: str, request: Request) -> dict[str, Any]:
 def list_inbox(
     conversation_id: str,
     request: Request,
-    processing_state: Literal["pending", "received", "succeeded", "blocked", "failed"]
+    processing_state: Literal[
+        "pending", "claimed", "received", "succeeded", "blocked", "failed"
+    ]
     | None = Query(default=None, alias="state"),
     limit: int = Query(default=200, ge=1, le=500),
 ) -> dict[str, Any]:
     _conversation(request, conversation_id)
-    items = _mailbox(request).list_inbox(
-        conversation_id, state=processing_state, limit=limit
-    )
+    stored_state = "received" if processing_state == "claimed" else processing_state
+    items = _mailbox(request).list_inbox(conversation_id, state=stored_state, limit=limit)
     return {
         "items": items,
         "total": len(items),
@@ -774,6 +851,59 @@ def stop_listener(conversation_id: str, request: Request) -> dict[str, Any]:
     _conversation(request, conversation_id)
     listener = _mailbox(request).request_listener_stop(conversation_id)
     return {"status": "stop_requested" if listener else "idle", "listener": listener}
+
+
+@router.post("/messages/{message_id}/acknowledge")
+def acknowledge_message(
+    message_id: str, payload: MessageAcknowledge, request: Request
+) -> dict[str, Any]:
+    _conversation(request, payload.conversation_id)
+    try:
+        return _mailbox(request).acknowledge(
+            message_id, payload.conversation_id, detail=payload.detail
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/messages/{message_id}/wait-receipt")
+async def wait_for_receipt(
+    message_id: str, payload: ReceiptWait, request: Request
+) -> dict[str, Any]:
+    _conversation(request, payload.source_conversation_id)
+    message = _messages(request).get(message_id)
+    if message is None:
+        raise HTTPException(status_code=404, detail="message not found")
+    if message.get("room_id") is not None or message.get("target_conversation_id") is None:
+        raise HTTPException(status_code=422, detail="receipt waits require a direct message")
+    if message.get("source_conversation_id") != payload.source_conversation_id:
+        raise HTTPException(status_code=403, detail="source conversation does not own message")
+
+    deadline = time.monotonic() + payload.timeout_seconds
+    while True:
+        current = _messages(request).get(message_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="message not found")
+        target_id = str(current["target_conversation_id"])
+        delivery = await asyncio.to_thread(
+            _mailbox(request).get_delivery, message_id, target_id
+        )
+        if _receipt_reached(
+            delivery,
+            milestone=payload.until,
+            after_revision=payload.after_revision,
+        ):
+            return _receipt_snapshot(
+                request, current, status_value="reached", waited_for=payload.until
+            )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return _receipt_snapshot(
+                request, current, status_value="timeout", waited_for=payload.until
+            )
+        await asyncio.sleep(min(0.5, remaining))
 
 
 @router.post("/messages/{message_id}/complete")

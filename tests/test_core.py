@@ -290,6 +290,191 @@ def test_foreground_mailbox_wait_completion_and_correlated_reply(tmp_path: Path)
         assert repeated.json()["reply_message_id"] == completed.json()["reply_message_id"]
 
 
+def test_requested_acknowledgement_and_receipt_wait_lifecycle(tmp_path: Path) -> None:
+    app = create_app(settings=settings(tmp_path), provider=Provider(), bridge_publisher=Publisher())
+    with TestClient(app) as client:
+        client.post("/api/v1/reconciliation")
+        candidates = client.get("/api/v1/conversations/candidates").json()["items"]
+        selected = client.post(
+            "/api/v1/conversations/import",
+            json={"conversation_ids": [item["conversation_id"] for item in candidates]},
+        ).json()["items"]
+        source, target = [item["conversation_id"] for item in selected]
+        sent = client.post(
+            "/api/v1/messages",
+            json={
+                "body": "Please acknowledge before the long inspection",
+                "target_conversation_id": target,
+                "source_conversation_id": source,
+                "actor_kind": "agent",
+                "acknowledgement_requested": True,
+            },
+        ).json()
+        app.state.mailbox.enqueue(sent["message_id"], [target])
+
+        pending = client.post(
+            f"/api/v1/messages/{sent['message_id']}/wait-receipt",
+            json={
+                "source_conversation_id": source,
+                "until": "claimed",
+                "timeout_seconds": 0,
+            },
+        ).json()
+        assert pending["status"] == "timeout"
+        assert pending["message"]["state"] in {"published", "pending_broker"}
+        assert pending["receipt"]["state"] == "pending"
+        assert "recipient_listener" in pending
+        assert "recipient_node_reachable" in pending
+
+        claimed_batch = client.post(
+            f"/api/v1/mailbox/{target}/wait",
+            json={"max_wait_seconds": 0, "batch_limit": 1},
+        ).json()
+        claimed = claimed_batch["items"][0]
+        assert claimed["claimed_at"] == claimed["received_at"]
+        assert claimed["attempt"] == 1
+
+        claimed_receipt = client.post(
+            f"/api/v1/messages/{sent['message_id']}/wait-receipt",
+            json={
+                "source_conversation_id": source,
+                "until": "claimed",
+                "timeout_seconds": 0,
+            },
+        ).json()
+        assert claimed_receipt["status"] == "reached"
+        claimed_revision = claimed_receipt["receipt"]["revision"]
+
+        acknowledged = client.post(
+            f"/api/v1/messages/{sent['message_id']}/acknowledge",
+            json={"conversation_id": target, "detail": "inspection started"},
+        )
+        assert acknowledged.status_code == 200
+        assert acknowledged.json()["acknowledged_at"] is not None
+        assert acknowledged.json()["acknowledgement_detail"] == "inspection started"
+        assert (
+            client.post(
+                f"/api/v1/messages/{sent['message_id']}/acknowledge",
+                json={"conversation_id": target, "detail": "inspection started"},
+            ).json()
+            == acknowledged.json()
+        )
+
+        ack_receipt = client.post(
+            f"/api/v1/messages/{sent['message_id']}/wait-receipt",
+            json={
+                "source_conversation_id": source,
+                "until": "acknowledged",
+                "timeout_seconds": 0,
+                "after_revision": claimed_revision,
+            },
+        ).json()
+        assert ack_receipt["status"] == "reached"
+        ack_revision = ack_receipt["receipt"]["revision"]
+        assert ack_revision > claimed_revision
+
+        stale_wait = client.post(
+            f"/api/v1/messages/{sent['message_id']}/wait-receipt",
+            json={
+                "source_conversation_id": source,
+                "until": "acknowledged",
+                "timeout_seconds": 0,
+                "after_revision": ack_revision,
+            },
+        ).json()
+        assert stale_wait["status"] == "timeout"
+
+        completed = client.post(
+            f"/api/v1/messages/{sent['message_id']}/complete",
+            json={"conversation_id": target, "outcome": "succeeded"},
+        )
+        assert completed.status_code == 200
+        terminal = client.post(
+            f"/api/v1/messages/{sent['message_id']}/wait-receipt",
+            json={
+                "source_conversation_id": source,
+                "until": "terminal",
+                "timeout_seconds": 0,
+                "after_revision": ack_revision,
+            },
+        ).json()
+        assert terminal["status"] == "reached"
+        attention_kinds = [item["kind"] for item in client.get("/api/v1/attention").json()["items"]]
+        assert attention_kinds.count("mailbox_acknowledged") == 1
+        assert attention_kinds.count("mailbox_terminal") == 1
+
+
+def test_receipt_validation_and_immediate_completion_notification(tmp_path: Path) -> None:
+    app = create_app(settings=settings(tmp_path), provider=Provider(), bridge_publisher=Publisher())
+    with TestClient(app) as client:
+        client.post("/api/v1/reconciliation")
+        candidates = client.get("/api/v1/conversations/candidates").json()["items"]
+        selected = client.post(
+            "/api/v1/conversations/import",
+            json={"conversation_ids": [item["conversation_id"] for item in candidates]},
+        ).json()["items"]
+        source, target = [item["conversation_id"] for item in selected]
+
+        missing_source = client.post(
+            "/api/v1/messages",
+            json={
+                "body": "receipt please",
+                "target_conversation_id": target,
+                "acknowledgement_requested": True,
+            },
+        )
+        assert missing_source.status_code == 422
+        room_receipt = client.post(
+            "/api/v1/messages",
+            json={
+                "body": "receipt please",
+                "room_id": "room-any",
+                "source_conversation_id": source,
+                "acknowledgement_requested": True,
+            },
+        )
+        assert room_receipt.status_code == 422
+
+        sent = client.post(
+            "/api/v1/messages",
+            json={
+                "body": "quick check",
+                "target_conversation_id": target,
+                "source_conversation_id": source,
+                "acknowledgement_requested": True,
+            },
+        ).json()
+        app.state.mailbox.enqueue(sent["message_id"], [target])
+        before_claim = client.post(
+            f"/api/v1/messages/{sent['message_id']}/acknowledge",
+            json={"conversation_id": target},
+        )
+        assert before_claim.status_code == 409
+        client.post(
+            f"/api/v1/mailbox/{target}/wait",
+            json={"max_wait_seconds": 0, "batch_limit": 1},
+        )
+        completed = client.post(
+            f"/api/v1/messages/{sent['message_id']}/complete",
+            json={"conversation_id": target, "outcome": "succeeded"},
+        ).json()
+        assert completed["acknowledged_at"] is not None
+
+        attention_kinds = [item["kind"] for item in client.get("/api/v1/attention").json()["items"]]
+        assert attention_kinds.count("mailbox_acknowledged") == 0
+        assert attention_kinds.count("mailbox_terminal") == 1
+
+        wrong_sender = client.post(
+            f"/api/v1/messages/{sent['message_id']}/wait-receipt",
+            json={
+                "source_conversation_id": target,
+                "until": "terminal",
+                "timeout_seconds": 0,
+            },
+        )
+        assert wrong_sender.status_code == 403
+
+
 def test_removed_orchestration_apis_are_absent(tmp_path: Path) -> None:
     with TestClient(create_app(settings=settings(tmp_path), provider=Provider())) as client:
         for path in ("/api/v1/work-items", "/api/v1/roles", "/api/v1/coordinator/intake"):
