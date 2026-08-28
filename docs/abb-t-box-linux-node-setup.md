@@ -278,11 +278,14 @@ message arrives, or when another conversation needs a concrete update about shar
 - Send directly with `agent-bridge message --chat <target-id> --from-chat <source-id>
   --operation <operation> --correlation-id <correlation-id> "<message>"`.
 - Enter listener mode only when asked by calling `wait_mailbox` (or `agent-bridge wait`) with this
-  chat's exact Bridge conversation ID. Process every returned item, record `succeeded`, `blocked`,
-  or `failed`, then wait again until the foreground turn is cancelled.
+  chat's exact Bridge conversation ID. Claim is automatic. If an item requests acknowledgment and
+  processing will continue, call `acknowledge_message` once; if it finishes immediately, call only
+  `complete_message`, which implicitly acknowledges. Unrequested items need no acknowledgment.
+  Record `succeeded`, `blocked`, or `failed`, then wait again until the turn is cancelled.
 - Treat From, Message, Correlation, and Operation as delivery metadata. Reply to From with operation
   `reply` and the same correlation ID. Do not send secrets. Hub acceptance, receipt, and completion
-  are separate states; never assume accepted mail has been processed.
+  are separate states; never treat a Broker ACK as proof the agent read the message. Receipt waits
+  are foreground operations and never wake an idle chat.
 ```
 
 Restart newly launched Codex processes after changing `config.toml`; existing processes do not
@@ -488,6 +491,9 @@ Bridge will not inject a competing turn. Then send mail with a unique correlatio
 /home/varunkamat/dev/ai-infra/agent-bridge/.venv/bin/agent-bridge message \
   --chat <tbox-conversation-id> \
   --from-chat <hub-source-conversation-id> \
+  --request-ack \
+  --wait-for acknowledged \
+  --timeout 30 \
   --operation request \
   --correlation-id abb-t-box-existing-001 \
   'Read-only Agent Bridge smoke test. Do not modify files, invoke robot/controller APIs, restart services, or command motion. Reply to the From conversation through Agent Bridge using operation reply and preserve this correlation ID. Include hostname, current working directory, Codex version, and exact text ABB_T_BOX_EXISTING_PONG.'
@@ -496,8 +502,8 @@ Bridge will not inject a competing turn. Then send mail with a unique correlatio
 Pass criteria:
 
 1. The T-Box node remains reachable while the foreground listener runs.
-2. The request reaches transport state `delivered`, then processing state `received` and
-   `succeeded`.
+2. The request reaches transport state `delivered`, then `claimed`, `acknowledged`, and terminal
+   `succeeded`. Immediate completion may satisfy acknowledgment without a separate call.
 3. The T-Box agent reports the expected hostname and cwd.
 4. The Hub receives `ABB_T_BOX_EXISTING_PONG` with correlation `abb-t-box-existing-001`.
 5. No files, services, controller state, or robot state change.
@@ -629,7 +635,7 @@ its writer, or relay tool/reasoning records.
 
 Check the correlation and listener health in the Hub UI. `pending` means no listener has received
 the item; it does not mean a provider turn failed. Confirm the target agent is waiting on the exact
-conversation ID. Do not requeue a `received` item automatically: inspect its outcome/attention and
+conversation ID. Do not requeue a `claimed` item automatically: inspect its outcome/attention and
 use explicit `requeue` only after deciding replay is safe.
 
 ## Rollback

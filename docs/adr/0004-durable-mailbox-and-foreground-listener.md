@@ -27,15 +27,23 @@ one live listener per mailbox, uses a durable cursor and heartbeat, and returns 
 mail as structured tool context. Cancelling the provider turn or requesting `stop_listener` ends
 the wait. An idle conversation is never automatically awakened.
 
-Message transport and processing are independent:
+Message transport, receipt, and processing are independent:
 
 - transport is `queued`, `published`, `delivered`, or `failed`;
-- processing is `pending`, `received`, `succeeded`, `blocked`, or `failed`.
+- receipt progresses from `claimed` to optional `acknowledged`;
+- processing ends as `succeeded`, `blocked`, or `failed`.
 
-Receipt is atomic when a listener claims a batch. The agent later records one terminal processing
-outcome, optionally with detail and a correlated reply. Received but unfinished mail is not
-automatically replayed; after the grace period it creates one deduplicated attention item. Requeue
-is always explicit.
+Claim is atomic when a listener receives a batch. The database retains the legacy `received` state,
+but public interfaces label it `claimed` because it proves only that the listener acquired the
+item. For opt-in direct-message receipts, an agent explicitly acknowledges after seeing the item if
+processing will continue. Immediate terminal completion implicitly acknowledges and avoids an
+extra tool call. Unrequested messages need no acknowledgment call.
+
+Acknowledgment and terminal updates create durable, idempotent attention records for the sender;
+they never inject provider turns. A sender may perform a cancellable foreground long-poll for a
+receipt milestone, but timeout or cancellation changes no message state and starts no background
+task. Claimed but unfinished mail is not automatically replayed; after the grace period it creates
+one deduplicated attention item. Requeue is always explicit and starts a new receipt attempt.
 
 Targeted transcript refresh routes a read-only command to the owning node. Codex nodes use
 `thread/read(includeTurns=true)` and validate conversation, node, and environment identity before
@@ -48,6 +56,7 @@ returned; reasoning, tool calls, tool output, credentials, and raw JSONL metadat
 - Agents receive mail only while intentionally listening; completion and attention notifications
   remain outside provider transcripts while the agent is idle.
 - Mail acceptance, agent receipt, and work completion are independently observable and auditable.
+- Conditional acknowledgments avoid distracting agents when the sender did not request a receipt.
 - Targeted refresh improves cross-machine visibility but exposes committed items, not guaranteed
   token-level live deltas.
 - Automatic wake, automatic listener restart, outer/inner relationships, and live delta relay are

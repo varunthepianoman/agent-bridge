@@ -66,8 +66,12 @@ agent-bridge candidates
 agent-bridge add <conversation-id>
 agent-bridge chats --query socket
 agent-bridge message --chat <conversation-id> "Check the server side"
+agent-bridge message --chat <conversation-id> --from-chat <source-id> \
+  --request-ack --wait-for acknowledged --timeout 30 "Start the review"
 agent-bridge inbox <conversation-id>
 agent-bridge wait <conversation-id> --max-wait-seconds 3600
+agent-bridge acknowledge <conversation-id> <message-id> --detail "Starting work"
+agent-bridge wait-receipt <source-id> <message-id> --until acknowledged --timeout 3600
 agent-bridge complete <conversation-id> <message-id> --outcome succeeded
 agent-bridge requeue <conversation-id> <message-id> --detail "Safe to retry"
 agent-bridge stop-listener <conversation-id>
@@ -84,12 +88,19 @@ configured defaults apply. An existing conversation's effort can be changed only
 explicit `turn --effort`; ordinary Bridge messages never change it. Bridge intentionally does not
 support changing a conversation's model after launch.
 
-`message` appends to the recipient's durable mailbox and returns after Hub acceptance. It never
-resumes, wakes, or steers the provider task. An agent receives mail only while it has explicitly
-entered foreground listener mode; the pending listener tool holds that agent's existing writer,
-and cancelling the turn or issuing `stop-listener` releases it normally. Receipt and processing are
-separate: listener delivery records `received`, then the agent records `succeeded`, `blocked`, or
-`failed`. Use `turn` only when a new provider turn is intended.
+`message` appends to the recipient's durable mailbox and normally returns after Hub acceptance. It
+never resumes, wakes, or steers the provider task. A sender can opt into a bounded foreground wait
+for `claimed`, `acknowledged`, or `terminal`; timing out reports the durable transport, receipt,
+listener, and node state without changing the message or starting background work.
+
+An agent receives mail only while it has explicitly entered foreground listener mode; the pending
+listener tool holds that agent's existing writer, and cancelling the turn or issuing
+`stop-listener` releases it normally. Listener delivery automatically records `claimed`. If a
+direct message requests acknowledgment and work will continue, call `acknowledge_message` (or
+`agent-bridge acknowledge`) once. If the work finishes immediately, call only `complete_message`
+(or `agent-bridge complete`): completion implicitly acknowledges it. Messages that did not request
+acknowledgment need no extra call. Receipt notifications stay outside provider transcripts. Use
+`turn` only when a new provider turn is intended.
 
 For observability, `refresh` requests sanitized, read-only transcript data from the machine that
 owns a conversation. Remote Codex refresh uses App Server `thread/read(includeTurns=true)` and does

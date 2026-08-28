@@ -170,11 +170,14 @@ message arrives, or when another conversation needs a concrete update about shar
 - Send directly with `agent-bridge message --chat <target-id> --from-chat <source-id>
   --operation <operation> --correlation-id <correlation-id> "<message>"`.
 - Enter listener mode only when asked by calling `wait_mailbox` (or `agent-bridge wait`) with this
-  chat's exact Bridge conversation ID. Process every returned item, record `succeeded`, `blocked`,
-  or `failed`, then wait again until the foreground turn is cancelled.
+  chat's exact Bridge conversation ID. Claim is automatic. If an item requests acknowledgment and
+  processing will continue, call `acknowledge_message` once; if it finishes immediately, call only
+  `complete_message`, which implicitly acknowledges. Unrequested items need no acknowledgment.
+  Record `succeeded`, `blocked`, or `failed`, then wait again until the turn is cancelled.
 - Treat From, Message, Correlation, and Operation as delivery metadata. Reply to From with operation
   `reply` and the same correlation ID. Do not send secrets. Hub acceptance, receipt, and completion
-  are separate states; never assume accepted mail has been processed.
+  are separate states; never treat a Broker ACK as proof the agent read the message. Receipt waits
+  are foreground operations and never wake an idle chat.
 ```
 
 Restart Codex after changing `config.toml` so new chats receive the MCP server. This MCP setup is
@@ -396,6 +399,9 @@ holds the writer. Then send authenticated mail with a unique correlation ID:
 /home/varunkamat/dev/ai-infra/agent-bridge/.venv/bin/agent-bridge message \
   --chat <windows-conversation-id> \
   --from-chat <linux-source-conversation-id> \
+  --request-ack \
+  --wait-for acknowledged \
+  --timeout 30 \
   --operation request \
   --correlation-id windows-nuc-smoke-001 \
   'Reply to the From conversation through Agent Bridge. Use operation reply and preserve this correlation ID. Include the NUC hostname and current working directory.'
@@ -405,13 +411,14 @@ Pass criteria:
 
 1. The message is durably accepted by the Hub.
 2. The active listener receives it without Bridge starting or resuming a provider turn.
-3. The message progresses from transport delivery through `received` to `succeeded` processing.
+3. The message progresses from transport delivery through `claimed` and `acknowledged` to
+   `succeeded` processing. Immediate completion may satisfy acknowledgment without a separate call.
 4. The Windows agent sends a reply to the `From` conversation with correlation
    `windows-nuc-smoke-001`.
 5. The reply arrives in the Linux source chat and both directions appear in message history.
 
 Mail remaining `pending` is not a provider failure; it means no foreground listener has received
-it. Do not blindly requeue `received` mail. Inspect the processing outcome or attention item first,
+it. Do not blindly requeue `claimed` mail. Inspect the processing outcome or attention item first,
 then use explicit requeue only when replay is safe. Cancel the listener turn or run
 `agent-bridge stop-listener <windows-conversation-id>` to release listener ownership.
 

@@ -14,7 +14,8 @@ authority and catalog visibility in one place.
 Messages use `Nats-Msg-Id` for broker de-duplication, explicit acknowledgement, bounded attempts,
 backoff, expiry, and durable dead-letter publication before source ACK. The Hub stores an
 operational projection and a user-facing NATS activity log without storing credentials. Broker
-acknowledgement is a transport event and is independent from mailbox receipt or processing outcome.
+acknowledgement is a transport event and is independent from mailbox claim, agent acknowledgment,
+or processing outcome. A Broker ACK is never presented as proof that an agent read a message.
 
 Configure one server with `AGENT_BRIDGE_NATS_SERVERS`. For a three-node JetStream cluster, provide
 all client URLs and set `AGENT_BRIDGE_NATS_REPLICAS=3`. Cluster deployment automation is not yet

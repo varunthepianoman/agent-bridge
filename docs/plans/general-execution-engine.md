@@ -82,17 +82,21 @@ modes:
 - `digest`: retain it for a later summarized update.
 
 Every message has a generated message ID, correlation ID, optional causation ID, source, target,
-operation, transport state, processing state, and error/detail. Sending mail never starts, resumes,
-or steers a provider task. Transport (`queued`, `published`, `delivered`, `failed`) is recorded
-separately from processing (`pending`, `received`, `succeeded`, `blocked`, `failed`).
+operation, transport state, receipt attempt/revision, processing state, and error/detail. Sending
+mail never starts, resumes, or steers a provider task. Transport (`queued`, `published`, `delivered`,
+`failed`) is recorded separately from receipt (`claimed`, optional `acknowledged`) and terminal
+processing (`succeeded`, `blocked`, `failed`).
 
 An agent explicitly enters foreground listener mode with its exact Bridge conversation ID. One
 listener may claim an inbox at a time. The blocking listener call uses short cancellable Hub waits,
 a durable cursor, heartbeat, and expiry while its existing provider turn owns the writer. It
-atomically receives an ordered batch, processes each item, records an outcome, and may send a
-correlated reply. Cancelling the turn or requesting listener stop ends the wait. Idle conversations
-are never awakened, and received-but-unfinished items are surfaced through attention rather than
-automatically replayed.
+atomically claims an ordered batch, processes each item, records an outcome, and may send a
+correlated reply. A direct sender may request acknowledgment. The receiver acknowledges only when
+requested and processing will continue; immediate completion implicitly acknowledges. The sender
+may wait in the foreground for `claimed`, `acknowledged`, or `terminal` for up to one hour, with a
+diagnostic timeout response and no background task. Cancelling the turn or requesting listener stop
+ends the mailbox wait. Idle conversations are never awakened, and claimed-but-unfinished items are
+surfaced through attention rather than automatically replayed.
 
 Provider mutation is a separate explicit action. `turn` starts a provider turn; `steer` targets an
 already-active turn only where supported and does not fall back to queued mail.
@@ -106,8 +110,8 @@ The attention surface has two lanes:
 
 - **Needs attention:** failed delivery, provider failure, remote-node failure, or an explicit
   `needs_user` operation.
-- **Updates:** completed local/remote turns, remotely started agents, listener lifecycle, and room
-  notifications.
+- **Updates:** requested acknowledgment/terminal receipts, completed local/remote turns, remotely
+  started agents, listener lifecycle, and room notifications.
 
 The Hub may request a targeted, read-only transcript refresh from the conversation's owning node.
 Codex refresh uses App Server `thread/read(includeTurns=true)` without resume, subscription, or
@@ -132,7 +136,8 @@ or reconciliation issues, message/correlation identifiers, and JSON export.
 | Send direct mail | mailbox composer | `agent-bridge message --chat` | `send_message` | — | durable mailbox append; never a provider turn |
 | Send room mail | room composer | `agent-bridge message --room` | `send_message` | — | NATS room → mailbox/notify/digest members |
 | Inspect/wait for mail | mailbox panel | mailbox/listener commands | `list_inbox` / `wait_mailbox` | — | atomic receipt through one foreground listener |
-| Complete/requeue mail | mailbox panel | mailbox outcome commands | `complete_message` / `requeue_message` | — | audited processing transition; explicit replay |
+| Acknowledge/wait for receipt | message history | `acknowledge` / `wait-receipt` | `acknowledge_message` / `wait_for_receipt` / `get_message_status` | — | opt-in direct-mail receipt; foreground sender wait |
+| Complete/requeue mail | mailbox panel | mailbox outcome commands | `complete_message` / `requeue_message` | — | terminal completion implicitly acknowledges; explicit replay |
 | Start full agent | creation form | `agent-bridge start [--model ...] [--effort ...]` | `start_agent` | New chat | local App Server/Claude or remote command; optional launch model and effort |
 | Send explicit turn / change effort | detail composer | `agent-bridge turn [--effort ...]` | `send_turn` | type a prompt / change provider setting | effort override applies to this and later turns; model cannot be changed after launch |
 | Refresh transcript | Refresh transcript | `agent-bridge refresh` | `refresh_conversation` | reopen/read task | owning-node read-only provider projection |
@@ -146,12 +151,15 @@ stdio facade (`agent-bridge-mcp`) over that API, so agents do not need direct da
 access.
 
 Mailbox HTTP operations are `GET /mailbox/{conversation_id}?state=…`, `POST
-/mailbox/{conversation_id}/wait`, `POST /mailbox/{conversation_id}/stop-listener`, `POST
-/messages/{message_id}/complete`, and `POST /messages/{message_id}/requeue`. Targeted read-only
-refresh is `POST /conversations/{conversation_id}/refresh`. Normal `POST /messages` accepts no
-delivery strategy. CLI equivalents are `inbox`, `wait`, `complete`, `requeue`, `stop-listener`, and
-`refresh`; MCP equivalents are `list_inbox`, `wait_mailbox`, `complete_message`, `requeue_message`,
-`stop_listener`, and `refresh_conversation`.
+/mailbox/{conversation_id}/wait`, `POST /mailbox/{conversation_id}/stop-listener`, `GET
+/messages/{message_id}`, `POST /messages/{message_id}/acknowledge`, `POST
+/messages/{message_id}/wait-receipt`, `POST /messages/{message_id}/complete`, and `POST
+/messages/{message_id}/requeue`. Targeted read-only refresh is `POST
+/conversations/{conversation_id}/refresh`. Normal `POST /messages` accepts no delivery strategy;
+direct messages may request acknowledgment. CLI equivalents include `inbox`, `wait`, `acknowledge`,
+`wait-receipt`, `complete`, `requeue`, `stop-listener`, and `refresh`; MCP equivalents include
+`list_inbox`, `wait_mailbox`, `acknowledge_message`, `wait_for_receipt`, `get_message_status`,
+`complete_message`, `requeue_message`, `stop_listener`, and `refresh_conversation`.
 
 ## API disposition
 
