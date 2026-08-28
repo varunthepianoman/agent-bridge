@@ -224,7 +224,9 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
                     "source_conversation_id": args.from_chat,
                     "operation": args.operation,
                     "correlation_id": args.correlation_id,
-                    "acknowledgement_requested": request_acknowledgement,
+                    "acknowledgement_requested": True
+                    if request_acknowledgement
+                    else None,
                 }
             ),
         )
