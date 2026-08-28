@@ -643,21 +643,39 @@ class MailboxStore:
             if row.state == "pending":
                 return self._delivery(session, message_id, conversation_id)
             previous = row.state
-            row.state = "pending"
-            row.listener_id = None
-            row.fencing_token = None
-            row.detail = detail
-            row.reply_message_id = None
-            row.received_at = None
-            row.acknowledged_at = None
-            row.acknowledgement_detail = None
-            row.completed_at = None
-            row.attention_emitted_at = None
-            row.acknowledgement_attention_emitted_at = None
-            row.terminal_attention_emitted_at = None
-            row.attempt += 1
-            row.revision += 1
-            row.updated_at = now
+            previous_revision = row.revision
+            result = session.execute(
+                update(MailboxDeliveryRow)
+                .where(
+                    MailboxDeliveryRow.message_id == message_id,
+                    MailboxDeliveryRow.recipient_conversation_id == conversation_id,
+                    MailboxDeliveryRow.state == previous,
+                    MailboxDeliveryRow.revision == previous_revision,
+                )
+                .values(
+                    state="pending",
+                    listener_id=None,
+                    fencing_token=None,
+                    detail=detail,
+                    reply_message_id=None,
+                    received_at=None,
+                    acknowledged_at=None,
+                    acknowledgement_detail=None,
+                    completed_at=None,
+                    attention_emitted_at=None,
+                    acknowledgement_attention_emitted_at=None,
+                    terminal_attention_emitted_at=None,
+                    attempt=MailboxDeliveryRow.attempt + 1,
+                    revision=MailboxDeliveryRow.revision + 1,
+                    updated_at=now,
+                ),
+                execution_options={"synchronize_session": False},
+            )
+            if cast(Any, result).rowcount != 1:
+                session.rollback()
+                raise ValueError("mailbox delivery changed concurrently; retry requeue")
+            session.expire_all()
+            row = self._require_delivery(session, message_id, conversation_id)
             self._add_event(
                 session,
                 row,
