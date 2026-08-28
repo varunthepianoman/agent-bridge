@@ -99,6 +99,16 @@ for raw_line in sys.stdin:
         thread = next((item for item in THREADS if item["id"] == params.get("threadId")), None)
         if thread is None:
             send({"id": request_id, "error": {"code": 404, "message": "thread not found"}})
+        elif thread["id"] == "thr_b" and params.get("includeTurns"):
+            send(
+                {
+                    "id": request_id,
+                    "error": {
+                        "code": -32000,
+                        "message": "failed to deserialize stored thread item: unknown variant",
+                    },
+                }
+            )
         else:
             result = dict(thread)
             if params.get("includeTurns"):

@@ -124,6 +124,8 @@ class CodexAdapterTest(unittest.TestCase):
 
                 discovered = [item async for item in adapter.discover(include_turns=True)]
                 self.assertEqual(len(discovered), 4)
+                self.assertEqual(discovered[1].provider_thread_id, "thr_b")
+                self.assertEqual(discovered[1].transcript_text, "")
                 self.assertTrue(discovered[2].is_archived)
 
         asyncio.run(scenario())

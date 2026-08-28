@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .app_server import AppServerClient, AppServerProtocolError
+from .app_server import AppServerClient, AppServerError, AppServerProtocolError
 
 # Omitting sourceKinds makes App Server return only cli/vscode threads.  The
 # catalog also needs native subagent ancestry, so discovery explicitly requests
@@ -86,11 +86,19 @@ class CodexCatalogAdapter:
             async for summary in self.iter_conversations(archived=archived):
                 discovered += 1
                 if include_turns:
-                    yield await self.get_conversation(
-                        summary.provider_thread_id,
-                        include_turns=True,
-                        archived=archived,
-                    )
+                    try:
+                        yield await self.get_conversation(
+                            summary.provider_thread_id,
+                            include_turns=True,
+                            archived=archived,
+                        )
+                    except AppServerError:
+                        # One thread can become unreadable when its stored item
+                        # schema is newer than the installed App Server. Keep
+                        # catalog reconciliation alive with the list summary;
+                        # a future pass can index its transcript after Codex is
+                        # upgraded or the stored item is repaired.
+                        yield summary
                 else:
                     yield summary
         if discovered == 0:
