@@ -7,10 +7,10 @@ import type {
   CatalogSettings,
   CoreConversation,
   MailboxSnapshot,
-  MessageReceiptStatus,
   NatsEvent,
   OperationResponse,
   ReceiptMilestone,
+  ReceiptWaitResult,
 } from "./types";
 
 const API_ROOT = import.meta.env.VITE_API_BASE ?? "/api/v1";
@@ -85,7 +85,7 @@ export function sendCoreMessage(input: {
   return request("/messages", { method: "POST", body: JSON.stringify(input) });
 }
 
-export function coreMessage(messageId: string): Promise<MessageReceiptStatus> {
+export function coreMessage(messageId: string): Promise<BridgeMessage> {
   return request(`/messages/${encodeURIComponent(messageId)}`);
 }
 
@@ -93,7 +93,7 @@ export function acknowledgeMailboxMessage(
   conversationId: string,
   messageId: string,
   detail?: string,
-): Promise<MessageReceiptStatus> {
+): Promise<BridgeMessage> {
   return request(`/messages/${encodeURIComponent(messageId)}/acknowledge`, {
     method: "POST",
     body: JSON.stringify({ conversation_id: conversationId, ...(detail ? { detail } : {}) }),
@@ -108,7 +108,7 @@ export function waitForMessageReceipt(
     timeout_seconds?: number;
     after_revision?: number;
   },
-): Promise<MessageReceiptStatus> {
+): Promise<ReceiptWaitResult> {
   return request(`/messages/${encodeURIComponent(messageId)}/wait-receipt`, {
     method: "POST",
     body: JSON.stringify({ source_conversation_id: sourceConversationId, ...input }),

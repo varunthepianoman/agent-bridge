@@ -94,25 +94,11 @@ export interface BridgeMessage {
 
 export type ReceiptMilestone = "claimed" | "acknowledged" | "terminal";
 
-export interface MessageReceiptStatus {
-  status?: "reached" | "timeout";
-  message_id: string;
-  acknowledgement_requested?: boolean;
-  transport_state?: BridgeMessage["transport_state"];
-  processing_state?: BridgeMessage["processing_state"];
-  attempt?: number;
-  revision?: number;
-  created_at?: string;
-  published_at?: string;
-  delivered_at?: string;
-  received_at?: string;
-  claimed_at?: string;
-  acknowledged_at?: string;
-  acknowledgement_detail?: string;
-  completed_at?: string;
-  outcome_at?: string;
-  outcome?: "succeeded" | "blocked" | "failed";
-  outcome_detail?: string;
+export interface ReceiptWaitResult {
+  status: "reached" | "timeout";
+  waited_for: ReceiptMilestone;
+  message: BridgeMessage;
+  receipt?: BridgeMessage | null;
   recipient_listener?: MailboxListener | null;
   recipient_node_reachable?: boolean;
 }
