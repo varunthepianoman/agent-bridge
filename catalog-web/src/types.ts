@@ -86,6 +86,9 @@ export interface BridgeMessage {
   outcome_at?: string;
   attempt?: number;
   revision?: number;
+  claimed_revision?: number;
+  acknowledged_revision?: number;
+  terminal_revision?: number;
   reply_message_id?: string;
   subject?: string;
   error?: string;

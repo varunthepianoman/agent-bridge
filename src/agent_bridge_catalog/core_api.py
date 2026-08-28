@@ -192,6 +192,9 @@ def _message_dict(request: Request, item: dict[str, Any]) -> dict[str, Any]:
             "acknowledgement_detail",
             "attempt",
             "revision",
+            "claimed_revision",
+            "acknowledged_revision",
+            "terminal_revision",
             "completed_at",
             "outcome_at",
             "reply_message_id",
@@ -208,9 +211,15 @@ def _receipt_reached(
 ) -> bool:
     if delivery is None:
         return False
-    revision = int(delivery.get("revision") or 0)
-    if after_revision is not None and revision <= after_revision:
-        return False
+    if after_revision is not None:
+        revision_key = {
+            "claimed": "claimed_revision",
+            "acknowledged": "acknowledged_revision",
+            "terminal": "terminal_revision",
+        }[milestone]
+        milestone_revision = delivery.get(revision_key)
+        if milestone_revision is None or int(milestone_revision) <= after_revision:
+            return False
     if milestone == "claimed":
         return delivery.get("claimed_at") is not None or delivery.get("received_at") is not None
     if milestone == "acknowledged":
@@ -873,8 +882,8 @@ def acknowledge_message(
 async def wait_for_receipt(
     message_id: str, payload: ReceiptWait, request: Request
 ) -> dict[str, Any]:
-    _conversation(request, payload.source_conversation_id)
-    message = _messages(request).get(message_id)
+    await asyncio.to_thread(_conversation, request, payload.source_conversation_id)
+    message = await asyncio.to_thread(_messages(request).get, message_id)
     if message is None:
         raise HTTPException(status_code=404, detail="message not found")
     if message.get("room_id") is not None or message.get("target_conversation_id") is None:
@@ -884,7 +893,7 @@ async def wait_for_receipt(
 
     deadline = time.monotonic() + payload.timeout_seconds
     while True:
-        current = _messages(request).get(message_id)
+        current = await asyncio.to_thread(_messages(request).get, message_id)
         if current is None:
             raise HTTPException(status_code=404, detail="message not found")
         target_id = str(current["target_conversation_id"])
@@ -896,13 +905,21 @@ async def wait_for_receipt(
             milestone=payload.until,
             after_revision=payload.after_revision,
         ):
-            return _receipt_snapshot(
-                request, current, status_value="reached", waited_for=payload.until
+            return await asyncio.to_thread(
+                _receipt_snapshot,
+                request,
+                current,
+                status_value="reached",
+                waited_for=payload.until,
             )
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return _receipt_snapshot(
-                request, current, status_value="timeout", waited_for=payload.until
+            return await asyncio.to_thread(
+                _receipt_snapshot,
+                request,
+                current,
+                status_value="timeout",
+                waited_for=payload.until,
             )
         await asyncio.sleep(min(0.5, remaining))
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event, Lock
 from types import SimpleNamespace
 from typing import Any
 
@@ -348,6 +350,7 @@ def test_requested_acknowledgement_and_receipt_wait_lifecycle(tmp_path: Path) ->
         ).json()
         assert claimed_receipt["status"] == "reached"
         claimed_revision = claimed_receipt["receipt"]["revision"]
+        assert claimed_receipt["receipt"]["claimed_revision"] == claimed_revision
 
         acknowledged = client.post(
             f"/api/v1/messages/{sent['message_id']}/acknowledge",
@@ -375,7 +378,19 @@ def test_requested_acknowledgement_and_receipt_wait_lifecycle(tmp_path: Path) ->
         ).json()
         assert ack_receipt["status"] == "reached"
         ack_revision = ack_receipt["receipt"]["revision"]
+        assert ack_receipt["receipt"]["acknowledged_revision"] == ack_revision
         assert ack_revision > claimed_revision
+
+        old_claim = client.post(
+            f"/api/v1/messages/{sent['message_id']}/wait-receipt",
+            json={
+                "source_conversation_id": source,
+                "until": "claimed",
+                "timeout_seconds": 0,
+                "after_revision": claimed_revision,
+            },
+        ).json()
+        assert old_claim["status"] == "timeout"
 
         stale_wait = client.post(
             f"/api/v1/messages/{sent['message_id']}/wait-receipt",
@@ -393,6 +408,16 @@ def test_requested_acknowledgement_and_receipt_wait_lifecycle(tmp_path: Path) ->
             json={"conversation_id": target, "outcome": "succeeded"},
         )
         assert completed.status_code == 200
+        old_ack = client.post(
+            f"/api/v1/messages/{sent['message_id']}/wait-receipt",
+            json={
+                "source_conversation_id": source,
+                "until": "acknowledged",
+                "timeout_seconds": 0,
+                "after_revision": ack_revision,
+            },
+        ).json()
+        assert old_ack["status"] == "timeout"
         terminal = client.post(
             f"/api/v1/messages/{sent['message_id']}/wait-receipt",
             json={
@@ -477,6 +502,76 @@ def test_receipt_validation_and_immediate_completion_notification(tmp_path: Path
             },
         )
         assert wrong_sender.status_code == 403
+
+
+def test_multiple_receipt_waiters_do_not_compete_for_listener_ownership(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = create_app(settings=settings(tmp_path), provider=Provider(), bridge_publisher=Publisher())
+    with TestClient(app) as client:
+        client.post("/api/v1/reconciliation")
+        candidates = client.get("/api/v1/conversations/candidates").json()["items"]
+        selected = client.post(
+            "/api/v1/conversations/import",
+            json={"conversation_ids": [item["conversation_id"] for item in candidates]},
+        ).json()["items"]
+        source, target = [item["conversation_id"] for item in selected]
+        sent = client.post(
+            "/api/v1/messages",
+            json={
+                "body": "long inspection",
+                "target_conversation_id": target,
+                "source_conversation_id": source,
+                "acknowledgement_requested": True,
+            },
+        ).json()
+        app.state.mailbox.enqueue(sent["message_id"], [target])
+        client.post(
+            f"/api/v1/mailbox/{target}/wait",
+            json={"max_wait_seconds": 0, "batch_limit": 1},
+        )
+
+        original_get_delivery = app.state.mailbox.get_delivery
+        waiter_count = 0
+        waiter_lock = Lock()
+        both_waiting = Event()
+
+        def observed_get_delivery(message_id: str, conversation_id: str):
+            nonlocal waiter_count
+            delivery = original_get_delivery(message_id, conversation_id)
+            if delivery is not None and delivery["acknowledged_at"] is None:
+                with waiter_lock:
+                    waiter_count += 1
+                    if waiter_count >= 2:
+                        both_waiting.set()
+            return delivery
+
+        monkeypatch.setattr(app.state.mailbox, "get_delivery", observed_get_delivery)
+        wait_payload = {
+            "source_conversation_id": source,
+            "until": "acknowledged",
+            "timeout_seconds": 2,
+        }
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(
+                    client.post,
+                    f"/api/v1/messages/{sent['message_id']}/wait-receipt",
+                    json=wait_payload,
+                )
+                for _ in range(2)
+            ]
+            assert both_waiting.wait(timeout=1)
+            assert app.state.mailbox.get_listener(target) is None
+            acknowledged = client.post(
+                f"/api/v1/messages/{sent['message_id']}/acknowledge",
+                json={"conversation_id": target, "detail": "started"},
+            )
+            assert acknowledged.status_code == 200
+            results = [future.result(timeout=2) for future in futures]
+
+        assert [result.status_code for result in results] == [200, 200]
+        assert [result.json()["status"] for result in results] == ["reached", "reached"]
 
 
 def test_removed_orchestration_apis_are_absent(tmp_path: Path) -> None:
