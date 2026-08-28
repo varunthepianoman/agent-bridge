@@ -60,6 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
     message.add_argument("--from-chat")
     message.add_argument("--operation", default="message")
     message.add_argument("--correlation-id")
+    message.add_argument("--request-ack", action="store_true")
+    message.add_argument("--wait-for", choices=("claimed", "acknowledged", "terminal"))
+    message.add_argument("--timeout", dest="timeout_seconds", type=float, default=30.0)
 
     inbox = commands.add_parser("inbox", help="list durable mail for one chat")
     inbox.add_argument("conversation_id")
@@ -79,6 +82,29 @@ def build_parser() -> argparse.ArgumentParser:
     complete.add_argument("--outcome", choices=("succeeded", "blocked", "failed"), required=True)
     complete.add_argument("--detail")
     complete.add_argument("--reply-body")
+
+    acknowledge = commands.add_parser(
+        "acknowledge", help="acknowledge requested mail before longer processing"
+    )
+    acknowledge.add_argument("conversation_id")
+    acknowledge.add_argument("message_id")
+    acknowledge.add_argument("--detail")
+
+    wait_receipt = commands.add_parser(
+        "wait-receipt", help="wait in the foreground for a direct-message receipt"
+    )
+    wait_receipt.add_argument("message_id")
+    wait_receipt.add_argument("--from-chat", required=True)
+    wait_receipt.add_argument(
+        "--until", choices=("claimed", "acknowledged", "terminal"), default="acknowledged"
+    )
+    wait_receipt.add_argument("--max-wait-seconds", type=float, default=3600.0)
+    wait_receipt.add_argument("--after-revision", type=int)
+
+    message_status = commands.add_parser(
+        "message-status", help="show transport and receipt status for one message"
+    )
+    message_status.add_argument("message_id")
 
     requeue = commands.add_parser("requeue", help="explicitly return mail to pending")
     requeue.add_argument("conversation_id")
@@ -146,7 +172,7 @@ def run(
         try:
             response = _request(client, args)
             response.raise_for_status()
-        except (OSError, httpx.HTTPError) as exc:
+        except (OSError, ValueError, httpx.HTTPError) as exc:
             print(str(exc), file=error_stream)
             return 1
     if response.content:
@@ -181,7 +207,13 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
     if command == "rename":
         return client.patch(f"/conversations/{args.conversation_id}", json={"alias": args.alias})
     if command == "message":
-        return client.post(
+        if args.wait_for is not None and args.from_chat is None:
+            raise ValueError("--from-chat is required with --wait-for")
+        request_acknowledgement = args.request_ack or args.wait_for in {
+            "acknowledged",
+            "terminal",
+        }
+        response = client.post(
             "/messages",
             json=_without_none(
                 {
@@ -191,8 +223,23 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
                     "source_conversation_id": args.from_chat,
                     "operation": args.operation,
                     "correlation_id": args.correlation_id,
+                    "acknowledgement_requested": request_acknowledgement,
                 }
             ),
+        )
+        if args.wait_for is None:
+            return response
+        response.raise_for_status()
+        message_id = response.json()["message_id"]
+        return client.post(
+            f"/messages/{message_id}/wait-receipt",
+            json={
+                "source_conversation_id": args.from_chat,
+                "until": args.wait_for,
+                "timeout_seconds": args.timeout_seconds,
+                "after_revision": None,
+            },
+            timeout=max(30, args.timeout_seconds + 10),
         )
     if command == "inbox":
         return client.get(
@@ -220,6 +267,28 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
                 }
             ),
         )
+    if command == "acknowledge":
+        return client.post(
+            f"/messages/{args.message_id}/acknowledge",
+            json=_without_none(
+                {"conversation_id": args.conversation_id, "detail": args.detail}
+            ),
+        )
+    if command == "wait-receipt":
+        return client.post(
+            f"/messages/{args.message_id}/wait-receipt",
+            json=_without_none(
+                {
+                    "source_conversation_id": args.from_chat,
+                    "until": args.until,
+                    "timeout_seconds": args.max_wait_seconds,
+                    "after_revision": args.after_revision,
+                }
+            ),
+            timeout=max(30, args.max_wait_seconds + 10),
+        )
+    if command == "message-status":
+        return client.get(f"/messages/{args.message_id}")
     if command == "requeue":
         return client.post(
             f"/messages/{args.message_id}/requeue",

@@ -51,9 +51,18 @@ def send_message(
     source_conversation_id: str | None = None,
     operation: str = "message",
     correlation_id: str | None = None,
+    acknowledgement_requested: bool = False,
+    wait_for: str | None = None,
+    timeout_seconds: float = 30,
 ) -> Any:
-    """Put durable mail in exactly one selected chat or room inbox."""
-    return _request(
+    """Put durable mail in one inbox, optionally waiting for a direct-message receipt."""
+    if wait_for not in {None, "claimed", "acknowledged", "terminal"}:
+        raise ValueError("wait_for must be claimed, acknowledged, terminal, or null")
+    request_acknowledgement = acknowledgement_requested or wait_for in {
+        "acknowledged",
+        "terminal",
+    }
+    sent = _request(
         "POST",
         "/messages",
         json={
@@ -64,6 +73,50 @@ def send_message(
             "actor_kind": "agent",
             "operation": operation,
             "correlation_id": correlation_id,
+            "acknowledgement_requested": request_acknowledgement,
+        },
+    )
+    if wait_for is None:
+        return sent
+    if source_conversation_id is None:
+        raise ValueError("source_conversation_id is required when waiting for a receipt")
+    return _request(
+        "POST",
+        f"/messages/{sent['message_id']}/wait-receipt",
+        timeout=max(30, timeout_seconds + 10),
+        json={
+            "source_conversation_id": source_conversation_id,
+            "until": wait_for,
+            "timeout_seconds": timeout_seconds,
+            "after_revision": None,
+        },
+    )
+
+
+@mcp.tool()
+def get_message_status(message_id: str) -> Any:
+    """Read transport and per-recipient processing status for one durable message."""
+    return _request("GET", f"/messages/{message_id}")
+
+
+@mcp.tool()
+def wait_for_receipt(
+    message_id: str,
+    source_conversation_id: str,
+    until: str = "acknowledged",
+    timeout_seconds: float = 3600,
+    after_revision: int | None = None,
+) -> Any:
+    """Wait in this foreground turn for a claimed, acknowledged, or terminal receipt."""
+    return _request(
+        "POST",
+        f"/messages/{message_id}/wait-receipt",
+        timeout=max(30, timeout_seconds + 10),
+        json={
+            "source_conversation_id": source_conversation_id,
+            "until": until,
+            "timeout_seconds": timeout_seconds,
+            "after_revision": after_revision,
         },
     )
 
@@ -113,6 +166,18 @@ def complete_message(
             "detail": detail,
             "reply_body": reply_body,
         },
+    )
+
+
+@mcp.tool()
+def acknowledge_message(
+    conversation_id: str, message_id: str, detail: str | None = None
+) -> Any:
+    """Acknowledge requested mail before longer processing; completion already implies this."""
+    return _request(
+        "POST",
+        f"/messages/{message_id}/acknowledge",
+        json={"conversation_id": conversation_id, "detail": detail},
     )
 
 
