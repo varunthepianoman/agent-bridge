@@ -61,6 +61,9 @@ def test_enqueue_fans_out_per_recipient_and_joins_message_content(tmp_path: Path
     assert all(item["correlation_id"] == "correlation-1" for item in deliveries)
     assert all(item["acknowledgement_requested"] is False for item in deliveries)
     assert all(item["attempt"] == 1 and item["revision"] == 0 for item in deliveries)
+    assert all(item["claimed_revision"] is None for item in deliveries)
+    assert all(item["acknowledged_revision"] is None for item in deliveries)
+    assert all(item["terminal_revision"] is None for item in deliveries)
     assert mailbox.enqueue("message-1", conversations) == deliveries
     assert [event["event_kind"] for event in mailbox.list_events(message_id="message-1")] == [
         "created",
@@ -86,6 +89,7 @@ def test_listener_fence_claim_and_completion_survive_listener_release(tmp_path: 
     assert received[0]["processing_state"] == "claimed"
     assert received[0]["claimed_at"] == received[0]["received_at"]
     assert received[0]["revision"] == 1
+    assert received[0]["claimed_revision"] == 1
     assert mailbox.receive_pending(
         recipient,
         listener_id="listener-a",
@@ -111,6 +115,8 @@ def test_listener_fence_claim_and_completion_survive_listener_release(tmp_path: 
     assert completed["state"] == "succeeded"
     assert completed["acknowledged_at"] is not None
     assert completed["revision"] == 2
+    assert completed["acknowledged_revision"] == 2
+    assert completed["terminal_revision"] == 2
     assert completed["reply_message_id"] == "reply-1"
     assert mailbox.get_delivery("message-1", recipient) == completed
 
@@ -248,6 +254,9 @@ def test_explicit_acknowledgement_is_requested_claimed_and_idempotent(tmp_path: 
     assert acknowledged["acknowledgement_detail"] == "working"
     assert acknowledged["acknowledged_at"] is not None
     assert acknowledged["revision"] == 2
+    assert acknowledged["claimed_revision"] == 1
+    assert acknowledged["acknowledged_revision"] == 2
+    assert acknowledged["terminal_revision"] is None
     assert acknowledged["acknowledgement_attention_emitted_at"] is not None
     assert acknowledged["terminal_attention_emitted_at"] is None
     assert mailbox.acknowledge("message-1", recipient, detail="retry") == acknowledged
@@ -295,6 +304,9 @@ def test_completion_implicitly_acknowledges_and_only_emits_terminal_attention(
     assert completed["acknowledgement_attention_emitted_at"] is None
     assert completed["terminal_attention_emitted_at"] is not None
     assert completed["revision"] == 2
+    assert completed["claimed_revision"] == 1
+    assert completed["acknowledged_revision"] == 2
+    assert completed["terminal_revision"] == 2
     with database.session() as session:
         attention = session.query(AttentionRow).all()
         assert [item.kind for item in attention] == ["mailbox_terminal"]
@@ -308,7 +320,7 @@ def test_explicit_acknowledgement_then_completion_emits_each_receipt_once(
     _request_ack(database)
     mailbox.enqueue("message-1", [recipient])
     listener = _claim(mailbox, recipient)
-    mailbox.acknowledge("message-1", recipient, detail="started")
+    acknowledged = mailbox.acknowledge("message-1", recipient, detail="started")
 
     completed = mailbox.complete(
         "message-1",
@@ -329,6 +341,9 @@ def test_explicit_acknowledgement_then_completion_emits_each_receipt_once(
 
     assert retried == completed
     assert completed["revision"] == 3
+    assert completed["acknowledged_at"] == acknowledged["acknowledged_at"]
+    assert completed["acknowledged_revision"] == 2
+    assert completed["terminal_revision"] == 3
     with database.session() as session:
         attention = session.query(AttentionRow).order_by(AttentionRow.created_at).all()
         assert [item.kind for item in attention] == [
@@ -353,6 +368,9 @@ def test_requeue_starts_new_attempt_and_clears_current_receipt_state(tmp_path: P
     assert requeued["claimed_at"] is None
     assert requeued["acknowledged_at"] is None
     assert requeued["acknowledgement_detail"] is None
+    assert requeued["claimed_revision"] is None
+    assert requeued["acknowledged_revision"] is None
+    assert requeued["terminal_revision"] is None
     assert requeued["acknowledgement_attention_emitted_at"] is None
     assert requeued["terminal_attention_emitted_at"] is None
 
@@ -365,6 +383,8 @@ def test_requeue_starts_new_attempt_and_clears_current_receipt_state(tmp_path: P
     second = mailbox.acknowledge("message-1", recipient, detail="second attempt")
     assert second["attempt"] == 2
     assert second["revision"] == 5
+    assert second["claimed_revision"] == 4
+    assert second["acknowledged_revision"] == 5
     with database.session() as session:
         attention = session.query(AttentionRow).all()
         assert len(attention) == 2

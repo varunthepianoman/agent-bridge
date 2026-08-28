@@ -38,6 +38,9 @@ def upgrade() -> None:
             sa.Column("acknowledgement_detail", sa.Text(), nullable=True),
             sa.Column("attempt", sa.Integer(), nullable=False, server_default="1"),
             sa.Column("revision", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("claimed_revision", sa.Integer(), nullable=True),
+            sa.Column("acknowledged_revision", sa.Integer(), nullable=True),
+            sa.Column("terminal_revision", sa.Integer(), nullable=True),
             sa.Column(
                 "acknowledgement_attention_emitted_at",
                 sa.DateTime(timezone=True),
@@ -63,6 +66,9 @@ def downgrade() -> None:
             for name in (
                 "terminal_attention_emitted_at",
                 "acknowledgement_attention_emitted_at",
+                "terminal_revision",
+                "acknowledged_revision",
+                "claimed_revision",
                 "revision",
                 "attempt",
                 "acknowledgement_detail",

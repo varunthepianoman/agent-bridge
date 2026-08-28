@@ -182,6 +182,9 @@ class MailboxDeliveryRow(Base):
     acknowledgement_detail: Mapped[str | None] = mapped_column(Text)
     attempt: Mapped[int] = mapped_column(Integer, default=1)
     revision: Mapped[int] = mapped_column(Integer, default=0)
+    claimed_revision: Mapped[int | None] = mapped_column(Integer)
+    acknowledged_revision: Mapped[int | None] = mapped_column(Integer)
+    terminal_revision: Mapped[int | None] = mapped_column(Integer)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     attention_emitted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), index=True

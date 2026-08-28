@@ -456,6 +456,7 @@ class MailboxStore:
                         received_at=now,
                         updated_at=now,
                         revision=MailboxDeliveryRow.revision + 1,
+                        claimed_revision=MailboxDeliveryRow.revision + 1,
                     ),
                     execution_options={"synchronize_session": False},
                 )
@@ -467,6 +468,7 @@ class MailboxStore:
                 candidate.received_at = now
                 candidate.updated_at = now
                 candidate.revision += 1
+                candidate.claimed_revision = candidate.revision
                 self._add_event(
                     session,
                     candidate,
@@ -514,6 +516,7 @@ class MailboxStore:
                     acknowledgement_attention_emitted_at=now,
                     updated_at=now,
                     revision=MailboxDeliveryRow.revision + 1,
+                    acknowledged_revision=MailboxDeliveryRow.revision + 1,
                 )
             )
             if cast(Any, result).rowcount != 1:
@@ -587,8 +590,13 @@ class MailboxStore:
                     state=outcome,
                     detail=detail,
                     reply_message_id=reply_message_id,
-                    acknowledged_at=row.acknowledged_at or now,
+                    acknowledged_at=func.coalesce(MailboxDeliveryRow.acknowledged_at, now),
+                    acknowledged_revision=func.coalesce(
+                        MailboxDeliveryRow.acknowledged_revision,
+                        MailboxDeliveryRow.revision + 1,
+                    ),
                     completed_at=now,
+                    terminal_revision=MailboxDeliveryRow.revision + 1,
                     terminal_attention_emitted_at=(
                         now
                         if message.acknowledgement_requested
@@ -659,9 +667,12 @@ class MailboxStore:
                     detail=detail,
                     reply_message_id=None,
                     received_at=None,
+                    claimed_revision=None,
                     acknowledged_at=None,
+                    acknowledged_revision=None,
                     acknowledgement_detail=None,
                     completed_at=None,
+                    terminal_revision=None,
                     attention_emitted_at=None,
                     acknowledgement_attention_emitted_at=None,
                     terminal_attention_emitted_at=None,
@@ -966,6 +977,9 @@ class MailboxStore:
             "acknowledgement_detail": delivery.acknowledgement_detail,
             "attempt": delivery.attempt,
             "revision": delivery.revision,
+            "claimed_revision": delivery.claimed_revision,
+            "acknowledged_revision": delivery.acknowledged_revision,
+            "terminal_revision": delivery.terminal_revision,
             "completed_at": _iso(delivery.completed_at),
             "outcome_at": _iso(delivery.completed_at),
             "attention_emitted_at": _iso(delivery.attention_emitted_at),
