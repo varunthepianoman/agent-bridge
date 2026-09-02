@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from io import StringIO
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -84,23 +85,29 @@ def test_cli_rejects_invalid_wait_before_sending() -> None:
     assert requests == []
 
 
-def test_mcp_send_waits_with_dynamic_timeout(monkeypatch: Any) -> None:
+async def test_mcp_send_waits_with_dynamic_timeout(monkeypatch: Any) -> None:
     calls: list[tuple[str, str, dict[str, Any]]] = []
 
-    def request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def request(
+        _ctx: Any, _tool: str, method: str, path: str, **kwargs: Any
+    ) -> dict[str, Any]:
         calls.append((method, path, kwargs))
         if path == "/messages":
             return {"message_id": "message-2"}
         return {"status": "timeout"}
 
     monkeypatch.setattr(server, "_request", request)
+    monkeypatch.setattr(
+        server, "_runtime", lambda _ctx: SimpleNamespace(wait_slice_seconds=None)
+    )
 
-    result = server.send_message(
+    result = await server.send_message(
         "inspect this",
         target_conversation_id="target",
         source_conversation_id="source",
         wait_for="terminal",
         timeout_seconds=3600,
+        ctx=object(),  # type: ignore[arg-type]
     )
 
     assert result == {"status": "timeout"}
@@ -109,21 +116,24 @@ def test_mcp_send_waits_with_dynamic_timeout(monkeypatch: Any) -> None:
     assert calls[1][2]["timeout"] == 3610
 
 
-def test_mcp_rejects_invalid_wait_before_sending(monkeypatch: Any) -> None:
+async def test_mcp_rejects_invalid_wait_before_sending(monkeypatch: Any) -> None:
     calls: list[tuple[str, str, dict[str, Any]]] = []
 
-    def request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def request(
+        _ctx: Any, _tool: str, method: str, path: str, **kwargs: Any
+    ) -> dict[str, Any]:
         calls.append((method, path, kwargs))
         return {"message_id": "unexpected"}
 
     monkeypatch.setattr(server, "_request", request)
 
     try:
-        server.send_message(
+        await server.send_message(
             "room message",
             room_id="room-1",
             source_conversation_id="source",
             wait_for="claimed",
+            ctx=object(),  # type: ignore[arg-type]
         )
     except ValueError as exc:
         assert "direct conversation" in str(exc)
@@ -133,24 +143,34 @@ def test_mcp_rejects_invalid_wait_before_sending(monkeypatch: Any) -> None:
     assert calls == []
 
 
-def test_mcp_receipt_tools_use_receipt_endpoints(monkeypatch: Any) -> None:
+async def test_mcp_receipt_tools_use_receipt_endpoints(monkeypatch: Any) -> None:
     calls: list[tuple[str, str, dict[str, Any]]] = []
 
-    def request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def request(
+        _ctx: Any, _tool: str, method: str, path: str, **kwargs: Any
+    ) -> dict[str, Any]:
         calls.append((method, path, kwargs))
         return {"ok": True}
 
     monkeypatch.setattr(server, "_request", request)
+    monkeypatch.setattr(
+        server, "_runtime", lambda _ctx: SimpleNamespace(wait_slice_seconds=None)
+    )
 
-    assert server.acknowledge_message("target", "message-3", "working") == {"ok": True}
-    assert server.wait_for_receipt(
+    assert await server.acknowledge_message(
+        "target", "message-3", "working", ctx=object()  # type: ignore[arg-type]
+    ) == {"ok": True}
+    assert await server.wait_for_receipt(
         "message-3",
         "source",
         until="terminal",
         timeout_seconds=60,
         after_revision=2,
+        ctx=object(),  # type: ignore[arg-type]
     ) == {"ok": True}
-    assert server.get_message_status("message-3") == {"ok": True}
+    assert await server.get_message_status(
+        "message-3", ctx=object()  # type: ignore[arg-type]
+    ) == {"ok": True}
 
     assert [call[1] for call in calls] == [
         "/messages/message-3/acknowledge",
@@ -204,16 +224,23 @@ def test_cli_wait_attention_maps_filters_and_dynamic_timeout() -> None:
     }
 
 
-def test_mcp_wait_for_attention_maps_arguments_and_dynamic_timeout(monkeypatch: Any) -> None:
+async def test_mcp_wait_for_attention_maps_arguments_and_dynamic_timeout(
+    monkeypatch: Any,
+) -> None:
     calls: list[tuple[str, str, dict[str, Any]]] = []
 
-    def request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def request(
+        _ctx: Any, _tool: str, method: str, path: str, **kwargs: Any
+    ) -> dict[str, Any]:
         calls.append((method, path, kwargs))
         return {"status": "timeout", "items": []}
 
     monkeypatch.setattr(server, "_request", request)
+    monkeypatch.setattr(
+        server, "_runtime", lambda _ctx: SimpleNamespace(wait_slice_seconds=None)
+    )
 
-    result = server.wait_for_attention(
+    result = await server.wait_for_attention(
         "cursor-2",
         max_wait_seconds=60,
         batch_limit=3,
@@ -221,6 +248,7 @@ def test_mcp_wait_for_attention_maps_arguments_and_dynamic_timeout(monkeypatch: 
         category="status",
         kinds=["turn_completed"],
         unread_only=True,
+        ctx=object(),  # type: ignore[arg-type]
     )
 
     assert result["status"] == "timeout"
@@ -230,6 +258,8 @@ def test_mcp_wait_for_attention_maps_arguments_and_dynamic_timeout(monkeypatch: 
             "/attention/wait",
             {
                 "timeout": 70,
+                "long_wait": True,
+                "timeout_is_continuation": False,
                 "json": {
                     "after_cursor": "cursor-2",
                     "max_wait_seconds": 60,

@@ -175,6 +175,13 @@ def _nats(request: Request) -> NatsEventStore:
     return request.app.state.nats_events  # type: ignore[no-any-return]
 
 
+async def _polling_delay(request: Request, seconds: float) -> None:
+    """Abort a long poll when its HTTP peer has gone away."""
+    if await request.is_disconnected():
+        raise asyncio.CancelledError("long-poll client disconnected")
+    await asyncio.sleep(seconds)
+
+
 def _conversation(request: Request, conversation_id: str) -> Any:
     row = _repository(request).get(conversation_id)
     if row is None or not row.selected:
@@ -846,7 +853,7 @@ async def wait_mailbox(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return {"status": "timeout", "items": [], "listener": current}
-            await asyncio.sleep(min(0.5, remaining))
+            await _polling_delay(request, min(0.5, remaining))
             try:
                 listener = await asyncio.to_thread(
                     _mailbox(request).heartbeat_listener,
@@ -856,6 +863,11 @@ async def wait_mailbox(
                     lease_seconds=lease_seconds,
                 )
             except ValueError as exc:
+                current = await asyncio.to_thread(
+                    _mailbox(request).get_listener, conversation_id
+                )
+                if current is None or current.get("stop_requested_at") is not None:
+                    return {"status": "stopped", "items": [], "listener": current}
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
     finally:
         await asyncio.to_thread(
@@ -931,7 +943,7 @@ async def wait_for_receipt(
                 status_value="timeout",
                 waited_for=payload.until,
             )
-        await asyncio.sleep(min(0.5, remaining))
+        await _polling_delay(request, min(0.5, remaining))
 
 
 @router.post("/messages/{message_id}/complete")
@@ -1037,7 +1049,7 @@ async def wait_for_attention(payload: AttentionWait, request: Request) -> dict[s
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return {"status": "timeout", "items": [], "next_cursor": next_cursor}
-        await asyncio.sleep(min(0.5, remaining))
+        await _polling_delay(request, min(0.5, remaining))
 
 
 @router.post("/attention/{attention_id}/acknowledge")

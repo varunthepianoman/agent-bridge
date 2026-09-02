@@ -148,7 +148,10 @@ or reconciliation issues, message/correlation identifiers, and JSON export.
 
 HTTP/OpenAPI remains the complete low-level interface under `/api/v1`. The MCP server is a local
 stdio facade (`agent-bridge-mcp`) over that API, so agents do not need direct database or NATS
-access.
+access. Its lifespan-managed async HTTP client permits concurrent tool calls and propagates MCP
+cancellation upstream. Wait tools accept an absolute `wait_until`; deployments with
+`AGENT_BRIDGE_MCP_WAIT_SLICE_SECONDS` return explicit `continue` responses until that overall
+deadline, preserving attention cursors, mailbox durability, and receipt revision boundaries.
 
 Mailbox HTTP operations are `GET /mailbox/{conversation_id}?state=…`, `POST
 /mailbox/{conversation_id}/wait`, `POST /mailbox/{conversation_id}/stop-listener`, `GET

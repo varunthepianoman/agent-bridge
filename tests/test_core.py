@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -7,10 +8,14 @@ from threading import Event, Lock
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
+import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 from agent_bridge_catalog.app import create_app
 from agent_bridge_catalog.config import Settings
+from agent_bridge_catalog.core_api import MailboxWait, stop_listener, wait_mailbox
 from agent_bridge_catalog.db import Database
 from agent_bridge_catalog.repository import CatalogRepository
 
@@ -572,6 +577,58 @@ def test_multiple_receipt_waiters_do_not_compete_for_listener_ownership(
 
         assert [result.status_code for result in results] == [200, 200]
         assert [result.json()["status"] for result in results] == ["reached", "reached"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_mailbox_wait_releases_only_its_listener(tmp_path: Path) -> None:
+    app = create_app(settings=settings(tmp_path), provider=Provider(), bridge_publisher=Publisher())
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://bridge.test"
+    ) as client:
+        await client.post("/api/v1/reconciliation")
+        candidates = (await client.get("/api/v1/conversations/candidates")).json()["items"]
+        selected = (
+            await client.post(
+                "/api/v1/conversations/import",
+                json={"conversation_ids": [item["conversation_id"] for item in candidates]},
+            )
+        ).json()["items"]
+        first, second = [item["conversation_id"] for item in selected]
+
+        async def receive() -> dict[str, Any]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        def request() -> Request:
+            return Request(
+                {
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/",
+                    "headers": [],
+                    "query_string": b"",
+                    "app": app,
+                },
+                receive,
+            )
+
+        payload = MailboxWait(max_wait_seconds=10, batch_limit=1)
+        first_wait = asyncio.create_task(wait_mailbox(first, payload, request()))
+        second_wait = asyncio.create_task(wait_mailbox(second, payload, request()))
+        while app.state.mailbox.get_listener(first) is None:
+            await asyncio.sleep(0.01)
+        while app.state.mailbox.get_listener(second) is None:
+            await asyncio.sleep(0.01)
+
+        first_wait.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_wait
+        assert app.state.mailbox.get_listener(first) is None
+        assert app.state.mailbox.get_listener(second) is not None
+
+        stopped = stop_listener(second, request())
+        assert stopped["status"] == "stop_requested"
+        assert (await second_wait)["status"] == "stopped"
+        assert app.state.mailbox.get_listener(second) is None
 
 
 def test_removed_orchestration_apis_are_absent(tmp_path: Path) -> None:

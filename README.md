@@ -103,6 +103,13 @@ direct message requests acknowledgment and work will continue, call `acknowledge
 acknowledgment need no extra call. Receipt notifications stay outside provider transcripts. Use
 `turn` only when a new provider turn is intended.
 
+The MCP facade uses one pooled asynchronous HTTP client, so waits do not block unrelated tools or
+other waits on the same MCP session. `wait_mailbox`, `wait_for_receipt`, and `wait_for_attention`
+accept an optional absolute `wait_until`. When `AGENT_BRIDGE_MCP_WAIT_SLICE_SECONDS` is set and an
+overall wait outlasts one slice, they return `status: "continue"` plus the exact continuation tool
+arguments; call that tool again rather than restarting the deadline. A sliced `send_message` wait
+continues through `wait_for_receipt` and must never resend the message.
+
 For observability, `refresh` requests sanitized, read-only transcript data from the machine that
 owns a conversation. Remote Codex refresh uses App Server `thread/read(includeTurns=true)` and does
 not resume, subscribe to, or acquire the task writer. See
@@ -123,6 +130,7 @@ not resume, subscribe to, or acquire the task writer. See
 | `AGENT_BRIDGE_NATS_REPLICAS` | JetStream stream replicas | `1` |
 | `AGENT_BRIDGE_NATS_USERNAME/PASSWORD` | Broker credentials | unset |
 | `AGENT_BRIDGE_NATS_CREDENTIALS_FILE` | NATS credentials-file alternative | unset |
+| `AGENT_BRIDGE_MCP_WAIT_SLICE_SECONDS` | MCP wait slice; unset keeps one uninterrupted wait | unset |
 
 Remote nodes additionally use `AGENT_BRIDGE_HUB_URL`, `AGENT_BRIDGE_NODE_TOKEN`, and
 `AGENT_BRIDGE_NODE_INTERVAL` (default 10 seconds). The Hub URL must be HTTPS except on loopback.
