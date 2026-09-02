@@ -158,3 +158,87 @@ def test_mcp_receipt_tools_use_receipt_endpoints(monkeypatch: Any) -> None:
         "/messages/message-3",
     ]
     assert calls[1][2]["timeout"] == 70
+
+
+def test_cli_wait_attention_maps_filters_and_dynamic_timeout() -> None:
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"status": "timeout", "items": []})
+
+    status = run(
+        [
+            "--api-url",
+            "https://bridge.test/api/v1",
+            "wait-attention",
+            "--after-cursor",
+            "cursor-1",
+            "--max-wait-seconds",
+            "17",
+            "--batch-limit",
+            "4",
+            "--conversation",
+            "conversation-1",
+            "--conversation",
+            "conversation-2",
+            "--category",
+            "needs_attention",
+            "--kind",
+            "provider_failed",
+            "--unread-only",
+        ],
+        transport=httpx.MockTransport(handle),
+    )
+
+    assert status == 0
+    assert requests[0].url.path == "/api/v1/attention/wait"
+    assert json.loads(requests[0].content) == {
+        "after_cursor": "cursor-1",
+        "max_wait_seconds": 17.0,
+        "batch_limit": 4,
+        "conversation_ids": ["conversation-1", "conversation-2"],
+        "category": "needs_attention",
+        "kinds": ["provider_failed"],
+        "unread_only": True,
+    }
+
+
+def test_mcp_wait_for_attention_maps_arguments_and_dynamic_timeout(monkeypatch: Any) -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append((method, path, kwargs))
+        return {"status": "timeout", "items": []}
+
+    monkeypatch.setattr(server, "_request", request)
+
+    result = server.wait_for_attention(
+        "cursor-2",
+        max_wait_seconds=60,
+        batch_limit=3,
+        conversation_ids=["conversation-1"],
+        category="status",
+        kinds=["turn_completed"],
+        unread_only=True,
+    )
+
+    assert result["status"] == "timeout"
+    assert calls == [
+        (
+            "POST",
+            "/attention/wait",
+            {
+                "timeout": 70,
+                "json": {
+                    "after_cursor": "cursor-2",
+                    "max_wait_seconds": 60,
+                    "batch_limit": 3,
+                    "conversation_ids": ["conversation-1"],
+                    "category": "status",
+                    "kinds": ["turn_completed"],
+                    "unread_only": True,
+                },
+            },
+        )
+    ]

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import builtins
 import hashlib
 import json
 from collections.abc import Iterable
@@ -9,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from agent_bridge_bridge.subjects import subject_for
@@ -184,6 +187,76 @@ class AttentionStore:
                 statement = statement.where(AttentionRow.acknowledged.is_(False))
             rows = session.scalars(statement.order_by(AttentionRow.created_at.desc())).all()
             return [self._dict(row) for row in rows]
+
+    def list_after(
+        self,
+        *,
+        after_cursor: str | None = None,
+        limit: int = 50,
+        conversation_ids: builtins.list[str] | None = None,
+        category: str | None = None,
+        kinds: builtins.list[str] | None = None,
+        unread_only: bool = False,
+    ) -> tuple[builtins.list[dict[str, Any]], str | None]:
+        position = self._decode_cursor(after_cursor) if after_cursor is not None else None
+        with self.database.session() as session:
+            statement = select(AttentionRow)
+            if conversation_ids is not None:
+                statement = statement.where(AttentionRow.conversation_id.in_(conversation_ids))
+            if category is not None:
+                statement = statement.where(AttentionRow.category == category)
+            if kinds is not None:
+                statement = statement.where(AttentionRow.kind.in_(kinds))
+            if unread_only:
+                statement = statement.where(AttentionRow.acknowledged.is_(False))
+            if position is not None:
+                created_at, attention_id = position
+                statement = statement.where(
+                    or_(
+                        AttentionRow.created_at > created_at,
+                        and_(
+                            AttentionRow.created_at == created_at,
+                            AttentionRow.attention_id > attention_id,
+                        ),
+                    )
+                )
+            rows = session.scalars(
+                statement.order_by(AttentionRow.created_at, AttentionRow.attention_id).limit(limit)
+            ).all()
+            items = [self._dict(row) for row in rows]
+        next_cursor = self.cursor_for_item(items[-1]) if items else after_cursor
+        return items, next_cursor
+
+    @staticmethod
+    def cursor_for_item(item: dict[str, Any]) -> str:
+        payload = json.dumps(
+            {
+                "v": 1,
+                "created_at": item["created_at"],
+                "attention_id": item["attention_id"],
+            },
+            separators=(",", ":"),
+        ).encode()
+        return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+    @staticmethod
+    def _decode_cursor(cursor: str) -> tuple[datetime, str]:
+        try:
+            padding = "=" * (-len(cursor) % 4)
+            payload = json.loads(base64.b64decode(cursor + padding, altchars=b"-_", validate=True))
+            if (
+                not isinstance(payload, dict)
+                or payload.get("v") != 1
+                or not isinstance(payload.get("created_at"), str)
+                or not isinstance(payload.get("attention_id"), str)
+            ):
+                raise ValueError
+            created_at = datetime.fromisoformat(payload["created_at"])
+            if created_at.tzinfo is None or not payload["attention_id"]:
+                raise ValueError
+            return created_at, payload["attention_id"]
+        except (binascii.Error, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise ValueError("invalid attention cursor") from exc
 
     def acknowledge(self, attention_id: str) -> bool:
         with self.database.session() as session:

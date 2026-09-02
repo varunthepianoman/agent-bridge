@@ -113,6 +113,16 @@ class MailboxWait(Input):
     batch_limit: int = Field(default=50, ge=1, le=50)
 
 
+class AttentionWait(Input):
+    after_cursor: str | None = None
+    max_wait_seconds: float = Field(default=3600, ge=0, le=3600)
+    batch_limit: int = Field(default=50, ge=1, le=50)
+    conversation_ids: list[str] | None = None
+    category: str | None = None
+    kinds: list[str] | None = None
+    unread_only: bool = False
+
+
 class MessageComplete(Input):
     conversation_id: str = Field(min_length=1)
     outcome: Literal["succeeded", "blocked", "failed"]
@@ -999,7 +1009,35 @@ def list_attention(
     request: Request, category: str | None = None, unread_only: bool = False
 ) -> dict[str, Any]:
     items = _attention(request).list(category=category, unread_only=unread_only)
-    return {"items": items, "total": len(items)}
+    next_cursor = _attention(request).cursor_for_item(items[0]) if items else None
+    return {"items": items, "total": len(items), "next_cursor": next_cursor}
+
+
+@router.post("/attention/wait")
+async def wait_for_attention(payload: AttentionWait, request: Request) -> dict[str, Any]:
+    """Wait for durable attention without claiming or acknowledging it."""
+
+    deadline = time.monotonic() + payload.max_wait_seconds
+    cursor = payload.after_cursor
+    while True:
+        try:
+            items, next_cursor = await asyncio.to_thread(
+                _attention(request).list_after,
+                after_cursor=cursor,
+                limit=payload.batch_limit,
+                conversation_ids=payload.conversation_ids,
+                category=payload.category,
+                kinds=payload.kinds,
+                unread_only=payload.unread_only,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if items:
+            return {"status": "received", "items": items, "next_cursor": next_cursor}
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"status": "timeout", "items": [], "next_cursor": next_cursor}
+        await asyncio.sleep(min(0.5, remaining))
 
 
 @router.post("/attention/{attention_id}/acknowledge")

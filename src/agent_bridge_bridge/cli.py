@@ -142,6 +142,16 @@ def build_parser() -> argparse.ArgumentParser:
     open_chat.add_argument("conversation_id")
 
     commands.add_parser("attention", help="list attention items")
+    wait_attention = commands.add_parser(
+        "wait-attention", help="wait in the foreground for attention"
+    )
+    wait_attention.add_argument("--after-cursor")
+    wait_attention.add_argument("--max-wait-seconds", type=float, default=3600)
+    wait_attention.add_argument("--batch-limit", type=int, default=50)
+    wait_attention.add_argument("--conversation", dest="conversation_ids", action="append")
+    wait_attention.add_argument("--category")
+    wait_attention.add_argument("--kind", dest="kinds", action="append")
+    wait_attention.add_argument("--unread-only", action="store_true")
     ack = commands.add_parser("ack", help="acknowledge an attention item")
     ack.add_argument("attention_id")
     commands.add_parser("nodes", help="list Bridge nodes and environments")
@@ -334,6 +344,22 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
         return client.post(f"/conversations/{args.conversation_id}/open")
     if command == "attention":
         return client.get("/attention")
+    if command == "wait-attention":
+        return client.post(
+            "/attention/wait",
+            json=_without_none(
+                {
+                    "after_cursor": args.after_cursor,
+                    "max_wait_seconds": args.max_wait_seconds,
+                    "batch_limit": args.batch_limit,
+                    "conversation_ids": args.conversation_ids,
+                    "category": args.category,
+                    "kinds": args.kinds,
+                    "unread_only": args.unread_only,
+                }
+            ),
+            timeout=max(30, args.max_wait_seconds + 10),
+        )
     if command == "ack":
         return client.post(f"/attention/{args.attention_id}/acknowledge")
     if command == "nodes":

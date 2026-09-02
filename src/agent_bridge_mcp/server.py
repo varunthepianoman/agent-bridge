@@ -263,6 +263,33 @@ def list_attention(category: str | None = None, unread_only: bool = False) -> An
 
 
 @mcp.tool()
+def wait_for_attention(
+    after_cursor: str | None = None,
+    max_wait_seconds: float = 3600,
+    batch_limit: int = 50,
+    conversation_ids: list[str] | None = None,
+    category: str | None = None,
+    kinds: list[str] | None = None,
+    unread_only: bool = False,
+) -> Any:
+    """Wait for durable attention; reuse next_cursor to receive only newer matching items."""
+    return _request(
+        "POST",
+        "/attention/wait",
+        timeout=max(30, max_wait_seconds + 10),
+        json={
+            "after_cursor": after_cursor,
+            "max_wait_seconds": max_wait_seconds,
+            "batch_limit": batch_limit,
+            "conversation_ids": conversation_ids,
+            "category": category,
+            "kinds": kinds,
+            "unread_only": unread_only,
+        },
+    )
+
+
+@mcp.tool()
 def acknowledge_attention(attention_id: str) -> Any:
     """Acknowledge one attention item."""
     return _request("POST", f"/attention/{attention_id}/acknowledge")

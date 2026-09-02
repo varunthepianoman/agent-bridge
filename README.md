@@ -80,6 +80,7 @@ agent-bridge start --provider codex --cwd /work/project \
   --model gpt-5.6-sol --effort high "Investigate the failing test"
 agent-bridge turn <conversation-id> --effort xhigh "Re-check the edge cases"
 agent-bridge attention
+agent-bridge wait-attention --max-wait-seconds 3600
 agent-bridge nats
 ```
 

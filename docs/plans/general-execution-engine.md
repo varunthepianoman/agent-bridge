@@ -141,7 +141,7 @@ or reconciliation issues, message/correlation identifiers, and JSON export.
 | Start full agent | creation form | `agent-bridge start [--model ...] [--effort ...]` | `start_agent` | New chat | local App Server/Claude or remote command; optional launch model and effort |
 | Send explicit turn / change effort | detail composer | `agent-bridge turn [--effort ...]` | `send_turn` | type a prompt / change provider setting | effort override applies to this and later turns; model cannot be changed after launch |
 | Refresh transcript | Refresh transcript | `agent-bridge refresh` | `refresh_conversation` | reopen/read task | owning-node read-only provider projection |
-| View/ack attention | Attention | `attention` / `ack` | `list_attention` / `acknowledge_attention` | provider notification | durable attention rows |
+| View/wait/ack attention | Attention | `attention` / `wait-attention` / `ack` | `list_attention` / `wait_for_attention` / `acknowledge_attention` | provider notification | durable, non-consuming attention rows with cursor-based waits |
 | Manage rooms | Rooms | `rooms` | `list_rooms` | — | room and membership APIs |
 | Inspect machines | Machines | `nodes` | `list_nodes` | — | heartbeat/environment ownership |
 | Inspect NATS | NATS server log | `nats` | — | — | live JetStream diagnostics + durable events |
