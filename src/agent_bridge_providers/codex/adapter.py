@@ -49,6 +49,7 @@ class DiscoveredConversation:
     is_ephemeral: bool = False
     is_archived: bool = False
     transcript_text: str = ""
+    last_assistant_message: str | None = None
     resume_command: str | None = None
     raw_metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -186,6 +187,7 @@ class CodexCatalogAdapter:
                 active_flags = tuple(str(flag) for flag in flags)
         git = thread.get("gitInfo")
         git = git if isinstance(git, Mapping) else {}
+        messages = _transcript_messages(thread.get("turns"))
 
         known = {
             "id",
@@ -223,7 +225,11 @@ class CodexCatalogAdapter:
             is_pinned=thread.get("isPinned") is True,
             is_ephemeral=thread.get("ephemeral") is True,
             is_archived=archived,
-            transcript_text=_transcript_text(thread.get("turns")),
+            transcript_text=_transcript_text(messages),
+            last_assistant_message=next(
+                (text for role, text in reversed(messages) if role == "assistant"),
+                None,
+            ),
             raw_metadata={key: value for key, value in thread.items() if key not in known},
         )
 
@@ -250,12 +256,16 @@ def _optional_number(value: Any) -> int | float | None:
     return value if isinstance(value, (int, float)) else None
 
 
-def _transcript_text(value: Any) -> str:
-    """Extract only human/agent prose, excluding command and tool output."""
+def _transcript_text(messages: Sequence[tuple[str, str]]) -> str:
+    return "\n".join(f"{role}: {text}" for role, text in messages)
+
+
+def _transcript_messages(value: Any) -> list[tuple[str, str]]:
+    """Extract ordered human/agent prose with normalized roles."""
 
     if not isinstance(value, list):
-        return ""
-    lines: list[str] = []
+        return []
+    messages: list[tuple[str, str]] = []
     for turn in value:
         if not isinstance(turn, Mapping):
             continue
@@ -271,8 +281,8 @@ def _transcript_text(value: Any) -> str:
             role = "user" if str(item_type).startswith("user") else "assistant"
             texts = _message_texts(item)
             if texts:
-                lines.append(f"{role}: {' '.join(texts)}")
-    return "\n".join(lines)
+                messages.append((role, " ".join(texts)))
+    return messages
 
 
 def _message_texts(item: Mapping[str, Any]) -> list[str]:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -703,19 +705,22 @@ def test_refresh_validates_identity_then_updates_sanitized_projection(tmp_path: 
             "/api/v1/conversations/import",
             json={"conversation_ids": [conversation_id]},
         )
-        queued = client.post(f"/api/v1/conversations/{conversation_id}/refresh")
-        assert queued.status_code == 202
-        command_id = queued.json()["command_id"]
-        command = client.post(
-            "/api/v1/node/commands/claim",
-            json={
-                "node_id": "new-node",
-                "provider_capacity_available": False,
-                "active_provider_conversations": [conversation_id],
-            },
-            headers=headers,
-        ).json()["command"]
-        assert command["command_id"] == command_id
+        def claim_refresh() -> dict:
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                command = client.post(
+                    "/api/v1/node/commands/claim",
+                    json={
+                        "node_id": "new-node",
+                        "provider_capacity_available": False,
+                        "active_provider_conversations": [conversation_id],
+                    },
+                    headers=headers,
+                ).json()["command"]
+                if command is not None:
+                    return command
+                time.sleep(0.01)
+            raise AssertionError("refresh command was not queued")
 
         base_output = {
             "node_id": "new-node",
@@ -728,34 +733,78 @@ def test_refresh_validates_identity_then_updates_sanitized_projection(tmp_path: 
                 "title": "After refresh",
                 "status": "active",
                 "transcript_text": "user: status\nassistant: still running",
+                "last_assistant_message": "still running",
                 "tool_output": "must be discarded",
                 "reasoning": "must be discarded",
             },
         }
-        mismatch = client.post(
-            f"/api/v1/node/commands/{command_id}/result",
-            json={
-                "node_id": "new-node",
-                "claim_token": command["claim_token"],
-                "status": "succeeded",
-                "output": {**base_output, "provider_thread_id": "wrong-thread"},
-            },
-            headers=headers,
-        )
-        assert mismatch.status_code == 409
-        assert client.get(f"/api/v1/node/commands/{command_id}").json()["status"] == "claimed"
+        refresh_url = f"/api/v1/conversations/{conversation_id}/refresh"
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            default_future = pool.submit(
+                client.post,
+                refresh_url,
+                params={"wait_seconds": 5},
+            )
+            command = claim_refresh()
+            command_id = command["command_id"]
+            mismatch = client.post(
+                f"/api/v1/node/commands/{command_id}/result",
+                json={
+                    "node_id": "new-node",
+                    "claim_token": command["claim_token"],
+                    "status": "succeeded",
+                    "output": {**base_output, "provider_thread_id": "wrong-thread"},
+                },
+                headers=headers,
+            )
+            assert mismatch.status_code == 409
+            assert (
+                client.get(f"/api/v1/node/commands/{command_id}").json()["status"]
+                == "claimed"
+            )
 
-        completed = client.post(
-            f"/api/v1/node/commands/{command_id}/result",
-            json={
-                "node_id": "new-node",
-                "claim_token": command["claim_token"],
+            completed = client.post(
+                f"/api/v1/node/commands/{command_id}/result",
+                json={
+                    "node_id": "new-node",
+                    "claim_token": command["claim_token"],
+                    "status": "succeeded",
+                    "output": base_output,
+                },
+                headers=headers,
+            )
+            assert completed.status_code == 200
+            default_refresh = default_future.result(timeout=10)
+            assert default_refresh.status_code == 200
+            assert default_refresh.json()["conversation"]["transcript_text"] == (
+                "user: status\nassistant: still running"
+            )
+
+            latest_future = pool.submit(
+                client.post,
+                refresh_url,
+                params={"wait_seconds": 5, "last_message_only": True},
+            )
+            latest_command = claim_refresh()
+            latest_completed = client.post(
+                f"/api/v1/node/commands/{latest_command['command_id']}/result",
+                json={
+                    "node_id": "new-node",
+                    "claim_token": latest_command["claim_token"],
+                    "status": "succeeded",
+                    "output": base_output,
+                },
+                headers=headers,
+            )
+            assert latest_completed.status_code == 200
+            latest_refresh = latest_future.result(timeout=10)
+            assert latest_refresh.status_code == 200
+            assert latest_refresh.json() == {
                 "status": "succeeded",
-                "output": base_output,
-            },
-            headers=headers,
-        )
-        assert completed.status_code == 200
+                "command_id": latest_command["command_id"],
+                "last_message": "still running",
+            }
+
         refreshed = client.get(f"/api/v1/conversations/{conversation_id}").json()
         assert refreshed["title"] == "After refresh"
         assert refreshed["status"] == "active"

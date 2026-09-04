@@ -164,6 +164,7 @@ class RemoteCodexRuntime:
                     "is_pinned": conversation.is_pinned,
                     "is_ephemeral": conversation.is_ephemeral,
                     "transcript_text": conversation.transcript_text,
+                    "last_assistant_message": conversation.last_assistant_message,
                 },
             },
         )

@@ -25,6 +25,49 @@ def make_client(*, timeout: float = 2.0) -> AppServerClient:
 
 
 class CodexAdapterTest(unittest.TestCase):
+    def test_maps_latest_assistant_message_from_sanitized_prose(self) -> None:
+        record = CodexCatalogAdapter.map_thread(
+            {
+                "id": "thr-latest",
+                "turns": [
+                    {
+                        "items": [
+                            {"type": "agentMessage", "text": "Earlier reply"},
+                            {"type": "reasoning", "text": "SECRET_REASONING"},
+                        ]
+                    },
+                    {
+                        "items": [
+                            {
+                                "type": "agentMessage",
+                                "content": [
+                                    {"type": "output_text", "text": "Latest"},
+                                    {"type": "text", "text": "reply"},
+                                ],
+                            },
+                            {"type": "commandExecution", "output": "SECRET_TOOL_OUTPUT"},
+                            {"type": "userMessage", "text": "One more question"},
+                        ]
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(record.last_assistant_message, "Latest reply")
+        self.assertIn("user: One more question", record.transcript_text)
+        self.assertNotIn("SECRET_REASONING", record.transcript_text)
+        self.assertNotIn("SECRET_TOOL_OUTPUT", record.transcript_text)
+
+    def test_maps_missing_assistant_message_as_none(self) -> None:
+        record = CodexCatalogAdapter.map_thread(
+            {
+                "id": "thr-no-reply",
+                "turns": [{"items": [{"type": "userMessage", "text": "Still waiting"}]}],
+            }
+        )
+
+        self.assertIsNone(record.last_assistant_message)
+
     def test_initializes_and_receives_notifications(self) -> None:
         async def scenario() -> None:
             client = make_client()

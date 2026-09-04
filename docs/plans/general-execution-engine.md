@@ -158,7 +158,9 @@ Mailbox HTTP operations are `GET /mailbox/{conversation_id}?state=…`, `POST
 /messages/{message_id}`, `POST /messages/{message_id}/acknowledge`, `POST
 /messages/{message_id}/wait-receipt`, `POST /messages/{message_id}/complete`, and `POST
 /messages/{message_id}/requeue`. Targeted read-only refresh is `POST
-/conversations/{conversation_id}/refresh`. Normal `POST /messages` accepts no delivery strategy;
+/conversations/{conversation_id}/refresh`; its optional `last_message_only=true` query returns only
+the newest native assistant message while retaining the full sanitized Hub projection. Normal
+`POST /messages` accepts no delivery strategy;
 direct messages may request acknowledgment. CLI equivalents include `inbox`, `wait`, `acknowledge`,
 `wait-receipt`, `complete`, `requeue`, `stop-listener`, and `refresh`; MCP equivalents include
 `list_inbox`, `wait_mailbox`, `acknowledge_message`, `wait_for_receipt`, `get_message_status`,

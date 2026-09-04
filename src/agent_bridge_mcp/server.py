@@ -234,16 +234,20 @@ async def get_conversation(
 async def refresh_conversation(
     conversation_id: str,
     wait_seconds: float = 10,
+    last_message_only: bool = False,
     ctx: Context[Any, Any, Any] | None = None,
 ) -> Any:
-    """Safely refresh a remote Codex transcript using read-only thread/read."""
+    """Safely refresh a remote Codex transcript, optionally returning its latest reply only."""
     assert ctx is not None
     return await _request(
         ctx,
         "refresh_conversation",
         "POST",
         f"/conversations/{conversation_id}/refresh",
-        params={"wait_seconds": wait_seconds},
+        params={
+            "wait_seconds": wait_seconds,
+            "last_message_only": last_message_only,
+        },
     )
 
 

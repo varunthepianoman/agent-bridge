@@ -200,6 +200,7 @@ async def test_read_uses_only_thread_read_and_filters_non_message_items(tmp_path
     assert result.output["conversation"]["transcript_text"] == (
         "user: Check progress\nassistant: Still running."
     )
+    assert result.output["conversation"]["last_assistant_message"] == "Still running."
     assert "PRIVATE_REASONING" not in str(result.output)
     assert "SECRET_TOOL_OUTPUT" not in str(result.output)
 

@@ -76,6 +76,7 @@ agent-bridge complete <conversation-id> <message-id> --outcome succeeded
 agent-bridge requeue <conversation-id> <message-id> --detail "Safe to retry"
 agent-bridge stop-listener <conversation-id>
 agent-bridge refresh <conversation-id> --wait-seconds 30
+agent-bridge refresh <conversation-id> --wait-seconds 30 --last-message-only
 agent-bridge start --provider codex --cwd /work/project \
   --model gpt-5.6-sol --effort high "Investigate the failing test"
 agent-bridge turn <conversation-id> --effort xhigh "Re-check the edge cases"
@@ -112,7 +113,10 @@ continues through `wait_for_receipt` and must never resend the message.
 
 For observability, `refresh` requests sanitized, read-only transcript data from the machine that
 owns a conversation. Remote Codex refresh uses App Server `thread/read(includeTurns=true)` and does
-not resume, subscribe to, or acquire the task writer. See
+not resume, subscribe to, or acquire the task writer. Pass `last_message_only=true` to the HTTP or
+MCP operation, or `--last-message-only` to the CLI, to return only the newest native assistant
+message while still refreshing and storing the complete sanitized transcript. A chat with no
+assistant message returns `last_message: null`. See
 [ADR 0004](docs/adr/0004-durable-mailbox-and-foreground-listener.md).
 
 ## Configuration

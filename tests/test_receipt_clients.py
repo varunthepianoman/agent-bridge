@@ -11,6 +11,62 @@ from agent_bridge_bridge.cli import run
 from agent_bridge_mcp import server
 
 
+def test_cli_refresh_can_request_only_the_latest_message() -> None:
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"status": "succeeded", "last_message": "Done"})
+
+    status = run(
+        [
+            "--api-url",
+            "https://bridge.test/api/v1",
+            "refresh",
+            "conversation-1",
+            "--wait-seconds",
+            "17",
+            "--last-message-only",
+        ],
+        transport=httpx.MockTransport(handle),
+    )
+
+    assert status == 0
+    assert requests[0].url.path == "/api/v1/conversations/conversation-1/refresh"
+    assert dict(requests[0].url.params) == {
+        "wait_seconds": "17.0",
+        "last_message_only": "true",
+    }
+
+
+async def test_mcp_refresh_can_request_only_the_latest_message(monkeypatch: Any) -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def request(
+        _ctx: Any, _tool: str, method: str, path: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls.append((method, path, kwargs))
+        return {"status": "succeeded", "last_message": "Done"}
+
+    monkeypatch.setattr(server, "_request", request)
+
+    result = await server.refresh_conversation(
+        "conversation-1",
+        wait_seconds=17,
+        last_message_only=True,
+        ctx=object(),  # type: ignore[arg-type]
+    )
+
+    assert result == {"status": "succeeded", "last_message": "Done"}
+    assert calls == [
+        (
+            "POST",
+            "/conversations/conversation-1/refresh",
+            {"params": {"wait_seconds": 17, "last_message_only": True}},
+        )
+    ]
+
+
 def test_cli_send_can_wait_for_acknowledgement() -> None:
     requests: list[httpx.Request] = []
 

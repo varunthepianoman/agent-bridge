@@ -49,6 +49,8 @@ Targeted transcript refresh routes a read-only command to the owning node. Codex
 `thread/read(includeTurns=true)` and validate conversation, node, and environment identity before
 updating the Hub projection. Only explicit user and assistant prose plus sanitized status are
 returned; reasoning, tool calls, tool output, credentials, and raw JSONL metadata are excluded.
+Callers may request a response containing only the newest native assistant message; this changes
+the refresh response shape without reducing the complete sanitized projection stored by the Hub.
 
 ## Consequences
 

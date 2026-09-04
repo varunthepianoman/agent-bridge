@@ -47,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     refresh = commands.add_parser("refresh", help="refresh a remote Codex transcript safely")
     refresh.add_argument("conversation_id")
     refresh.add_argument("--wait-seconds", type=float, default=10.0)
+    refresh.add_argument("--last-message-only", action="store_true")
 
     rename = commands.add_parser("rename", help="set a Bridge alias")
     rename.add_argument("conversation_id")
@@ -213,7 +214,10 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
     if command == "refresh":
         return client.post(
             f"/conversations/{args.conversation_id}/refresh",
-            params={"wait_seconds": args.wait_seconds},
+            params={
+                "wait_seconds": args.wait_seconds,
+                "last_message_only": args.last_message_only,
+            },
         )
     if command == "rename":
         return client.patch(f"/conversations/{args.conversation_id}", json={"alias": args.alias})

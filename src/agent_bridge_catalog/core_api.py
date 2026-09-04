@@ -427,6 +427,7 @@ async def refresh_conversation(
     request: Request,
     response: Response,
     wait_seconds: float = Query(default=0, ge=0, le=60),
+    last_message_only: bool = False,
 ) -> dict[str, Any]:
     """Request a read-only projection refresh from the conversation's owning node."""
 
@@ -465,6 +466,15 @@ async def refresh_conversation(
         current = refreshed
 
     if current["status"] == "succeeded":
+        if last_message_only:
+            result = current.get("result") or {}
+            output = result.get("output") or {}
+            projection = output.get("conversation") or {}
+            return {
+                "status": "succeeded",
+                "command_id": command["command_id"],
+                "last_message": projection.get("last_assistant_message"),
+            }
         refreshed_row = _conversation(request, conversation_id)
         return {
             "status": "succeeded",

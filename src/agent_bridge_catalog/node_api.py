@@ -259,6 +259,9 @@ def _validate_read_result(command: Mapping[str, Any], output: Mapping[str, Any])
         raise ValueError("conversation read result identity does not match its command")
     if any(conversation.get(key) != actual[key] for key in ("provider", "provider_thread_id")):
         raise ValueError("conversation read projection identity does not match its command")
+    last_message = conversation.get("last_assistant_message")
+    if last_message is not None and not isinstance(last_message, str):
+        raise ValueError("conversation read projection last assistant message is invalid")
     expected_id = stable_conversation_id(
         str(expected["provider"]),
         str(expected["provider_thread_id"]),
