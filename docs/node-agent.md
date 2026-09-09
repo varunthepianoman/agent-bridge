@@ -37,3 +37,45 @@ For the Ubuntu ABB robot controller machine, follow
 Remote-command lease recovery, node-side result journaling, and resilient long-turn supervision are
 specified as a follow-on in
 [`plans/remote-command-reliability.md`](plans/remote-command-reliability.md).
+
+## Codex writer release and live inspection
+
+Use Codex **0.154.0 or newer** on every machine that executes Bridge turns. Bridge launches
+its App Server with `-c thread_unload_delay_secs=0`. After a turn finishes, Bridge unsubscribes
+and Codex unloads that idle thread without an inactivity grace period, releasing its writer
+for `codex resume`. Unloading remains asynchronous; active turns and subscribed threads stay
+loaded. Other conversations do not require a server restart.
+
+Codex 0.153.4 hard-codes a 30-minute no-subscriber inactivity delay and does not support this
+setting. Passing the override to an older binary is insufficient. Upgrade the actual executable
+in `AGENT_BRIDGE_CODEX_BIN`, not just a different `codex` found on an interactive shell's PATH.
+Restart the node service once, after its turns and any needed server-owned background processes
+are finished, so it launches the upgraded binary with the new startup setting.
+
+For an older Bridge installation, a deployment can set `thread_unload_delay_secs = 0` at the
+**top level** of the service user's Codex `config.toml` after upgrading Codex. Preserve existing
+settings, place it before any TOML table, and restart the idle node. The current Bridge launch
+override makes this manual setting unnecessary. Retain the previous binary/configuration for
+rollback; rolling back below 0.154.0 restores the writer-delay limitation.
+
+A running chat still has one writer: opening a second `codex resume` TUI cannot attach as a
+read-only viewer. To inspect it without interrupting it, use:
+
+```bash
+agent-bridge refresh <conversation-id>
+agent-bridge refresh <conversation-id> --last-message-only
+```
+
+Refresh uses `thread/read`, which does not acquire the writer. After completion, use the normal
+resume command. Never delete rollout or lock files to force a handoff.
+
+The opt-in regression test runs the real Codex binary against a local mock model with an isolated
+Codex home and no credentials or external model requests:
+
+```bash
+AGENT_BRIDGE_TEST_CODEX_BIN=/absolute/path/to/codex PYTHONPATH=src \
+  python -m pytest -q tests/test_codex_unload_integration.py
+```
+
+It verifies active-turn preservation, read-only inspection while the writer is held, writer
+release on completion, resume by a second server, and preservation of a separate subscribed thread.

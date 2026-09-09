@@ -78,7 +78,7 @@ class AppServerClient:
 
     def __init__(
         self,
-        command: Sequence[str] = ("codex", "app-server"),
+        command: Sequence[str] = ("codex", "app-server", "-c", "thread_unload_delay_secs=0"),
         *,
         client_name: str = "agent_bridge_catalog",
         client_title: str = "Agent Bridge Catalog",
@@ -118,6 +118,16 @@ class AppServerClient:
         self._initialize_result: Mapping[str, Any] | None = None
         self._recent_stderr: deque[str] = deque(maxlen=50)
         self._closing = False
+
+    @classmethod
+    def for_codex(cls, codex_bin: str = "codex") -> AppServerClient:
+        """Launch Codex 0.154+ with immediate idle writer release.
+
+        Unsubscribe alone leaves older Codex threads loaded for 30 minutes.
+        This startup override affects only Bridge's server; active or subscribed
+        threads remain loaded. It does not change the user's Codex config file.
+        """
+        return cls((codex_bin, "app-server", "-c", "thread_unload_delay_secs=0"))
 
     async def __aenter__(self) -> AppServerClient:
         await self.start()

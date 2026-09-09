@@ -226,6 +226,10 @@ readlink -f "$(command -v codex)"
 codex --version
 ```
 
+Use **Codex 0.154.0 or newer** for immediate writer release after Bridge turns.
+See [writer release and live inspection](node-agent.md#codex-writer-release-and-live-inspection)
+for upgrade, service restart, and existing-installation instructions.
+
 Run `codex` once and choose **Sign in with ChatGPT**, or another sign-in method offered by the CLI:
 
 ```bash

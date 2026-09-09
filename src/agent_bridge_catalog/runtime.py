@@ -33,7 +33,7 @@ class ConversationRuntime:
         claude_bin: str = "claude",
         codex_active_turn: ActiveTurnDelivery | None = None,
     ) -> None:
-        self.codex = AppServerClient((codex_bin, "app-server"))
+        self.codex = AppServerClient.for_codex(codex_bin)
         self.codex.add_notification_handler(self._codex_notification)
         self.claude_bin = claude_bin
         self.codex_active_turn = codex_active_turn or CodexIpcSteering()

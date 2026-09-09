@@ -36,7 +36,7 @@ async def _run(*, once: bool) -> None:
         settings.token,
         timeout=settings.request_timeout_seconds,
     )
-    codex_client = AppServerClient((settings.codex_bin, "app-server"))
+    codex_client = AppServerClient.for_codex(settings.codex_bin)
     provider = CompositeCatalogAdapter(
         [
             CodexCatalogAdapter(codex_client, codex_bin=settings.codex_bin),

@@ -64,7 +64,7 @@ class CodexCatalogAdapter:
         codex_bin: str = "codex",
         codex_home: Path | None = None,
     ) -> None:
-        self._client = client or AppServerClient((codex_bin, "app-server"))
+        self._client = client or AppServerClient.for_codex(codex_bin)
         self._owns_client = client is None
         self._codex_home = codex_home
 
