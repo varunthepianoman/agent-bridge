@@ -405,9 +405,47 @@ async def wait_mailbox(
     batch_limit: int = 50,
     wait_until: str | None = None,
     ctx: Context[Any, Any, Any] | None = None,
+    forever: bool = False,
 ) -> Any:
-    """Wait for mail. On status continue, call this tool again with returned arguments."""
+    """Wait for mail; on continue, call again with returned arguments.
+
+    forever renews bounded waits without a deadline; max_wait_seconds applies only
+    to timed waits. forever cannot be combined with wait_until.
+    """
     assert ctx is not None
+    if forever:
+        if wait_until is not None:
+            raise ValueError("forever cannot be combined with wait_until")
+        slice_seconds = _runtime(ctx).wait_slice_seconds
+        request_seconds = min(60, slice_seconds) if slice_seconds is not None else 60
+        result = await _request(
+            ctx,
+            "wait_mailbox",
+            "POST",
+            f"/mailbox/{conversation_id}/wait",
+            timeout=max(30, request_seconds + 10),
+            long_wait=True,
+            timeout_is_continuation=True,
+            json={"max_wait_seconds": request_seconds, "batch_limit": batch_limit},
+        )
+        if (
+            isinstance(result, dict)
+            and result.get("status") == "timeout"
+            and not result.get("items")
+        ):
+            return {
+                **result,
+                "status": "continue",
+                "continuation": {
+                    "tool": "wait_mailbox",
+                    "arguments": {
+                        "conversation_id": conversation_id,
+                        "batch_limit": batch_limit,
+                        "forever": True,
+                    },
+                },
+            }
+        return result
     budget = _wait_budget(max_wait_seconds, wait_until, _runtime(ctx).wait_slice_seconds)
     result = await _request(
         ctx,

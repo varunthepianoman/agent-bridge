@@ -75,7 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     wait = commands.add_parser("wait", help="wait in the foreground for chat mail")
     wait.add_argument("conversation_id")
-    wait.add_argument("--max-wait-seconds", type=float, default=3600)
+    wait_mode = wait.add_mutually_exclusive_group()
+    wait_mode.add_argument("--max-wait-seconds", type=float, default=3600)
+    wait_mode.add_argument(
+        "--forever", action="store_true", help="renew bounded waits until mail arrives or stopped"
+    )
     wait.add_argument("--batch-limit", type=int, default=50)
 
     complete = commands.add_parser("complete", help="record a mailbox message outcome")
@@ -268,14 +272,22 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
             params=_without_none({"state": args.state, "limit": args.limit}),
         )
     if command == "wait":
-        return client.post(
-            f"/mailbox/{args.conversation_id}/wait",
-            json={
-                "max_wait_seconds": args.max_wait_seconds,
-                "batch_limit": args.batch_limit,
-            },
-            timeout=max(30, args.max_wait_seconds + 10),
-        )
+        wait_seconds = 60 if args.forever else args.max_wait_seconds
+        while True:
+            response = client.post(
+                f"/mailbox/{args.conversation_id}/wait",
+                json={
+                    "max_wait_seconds": wait_seconds,
+                    "batch_limit": args.batch_limit,
+                },
+                timeout=max(30, wait_seconds + 10),
+            )
+            response.raise_for_status()
+            if not args.forever:
+                return response
+            result = response.json()
+            if result.get("status") != "timeout" or result.get("items"):
+                return response
     if command == "complete":
         return client.post(
             f"/messages/{args.message_id}/complete",

@@ -111,6 +111,28 @@ overall wait outlasts one slice, they return `status: "continue"` plus the exact
 arguments; call that tool again rather than restarting the deadline. A sliced `send_message` wait
 continues through `wait_for_receipt` and must never resend the message.
 
+To wait indefinitely for the next available batch of mail, use:
+
+```bash
+agent-bridge wait <conversation-id> --forever
+```
+
+Or call MCP `wait_mailbox(conversation_id="<conversation-id>", forever=true)`.
+The CLI silently renews empty 60-second waits and prints the first received batch before exiting.
+MCP performs one request per call (at most 60 seconds, or a shorter configured wait slice); after
+an empty timeout it returns `status: "continue"` with `forever=true` in the continuation arguments.
+Follow those arguments until mail arrives; there is no overall deadline. Existing timed defaults
+remain unchanged. CLI `--forever` conflicts with `--max-wait-seconds`; MCP `forever=true` conflicts
+with `wait_until` and ignores `max_wait_seconds`, which applies only to timed waits.
+
+After finishing work, enter the indefinite wait. Process the returned mail, then enter a new wait
+when done. Collect CLI output in the active task; do not leave an unattended background consumer.
+Cancel the CLI with Ctrl-C, cancel the MCP tool call, or use `stop-listener` for the active listener.
+A stopped response ends the wait; transport failures and other errors are reported without retry.
+This mode does not automatically recover or redeliver claimed messages; inspect the inbox manually
+if a result is lost to interruption. It waits for mail only and does not keep processing after mail
+arrives or restart an ended agent turn.
+
 For observability, `refresh` requests sanitized, read-only transcript data from the machine that
 owns a conversation. Remote Codex refresh uses App Server `thread/read(includeTurns=true)` and does
 not resume, subscribe to, or acquire the task writer. Pass `last_message_only=true` to the HTTP or
