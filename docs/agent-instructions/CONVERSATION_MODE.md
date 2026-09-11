@@ -18,14 +18,21 @@ turn cannot execute a wait. This is a foreground receive/process/wait loop, not 
 1. Resolve this conversation's exact Agent Bridge conversation ID from the directory and native
    thread identity. Never use another conversation's ID or guess from list order. If identity is
    ambiguous, ask for it rather than consuming another inbox.
-2. Prefer MCP `wait_mailbox(conversation_id="<this-id>", forever=true)` when its available schema
-   supports `forever`. Do not pass `wait_until`. On `status: continue`, call the returned tool with
-   its continuation arguments; preserve `forever=true`. Continue without an overall deadline.
-   Empty wait slices are normal; do not narrate every renewal.
-3. If the connected MCP process lacks `forever`, use the installed CLI:
+2. Use the **foreground CLI**, not MCP mailbox continuations or background polling:
    `agent-bridge wait <this-id> --forever` with this machine's configured executable and Hub URL.
-   Keep collecting its output through the active execution session until it returns. Do not leave
-   an unattended background consumer, start duplicate listeners, or abandon an execution session.
+   Run it as a blocking foreground operation and await completion. Do not detach it with `&`,
+   `nohup`, a background job, or a fire-and-forget tool call. The CLI silently renews its bounded
+   HTTP requests internally; those renewals must not trigger agent commentary.
+3. Stay blocked awaiting that same CLI process until mail arrives, it is stopped, an error occurs,
+   or the user interrupts. Do not use short output polls to repeatedly return to reasoning, do
+   unrelated work, or emit "still waiting", "no message yet", or other intermediate text.
+   If the execution tool automatically returns a running-session handle, immediately await that
+   same session using its blocking completion wait and the longest wait permitted by the tool
+   and higher-priority instructions. A UI label such as "background terminal" alone does not
+   mean the process was detached. If the tool necessarily yields an empty result, continue waiting
+   on that same session silently; do not restart the CLI or start another listener. Report a
+   genuine inability to wait as a blocker rather than claiming a continuous wait. Communicate
+   once before entering the wait, then only on mail, stop, error, or direct user interruption.
 4. When mail arrives, inspect all returned messages and handle them under existing authorization
    and instruction rules. Acknowledge messages that request it before longer work; record the
    outcome with the normal completion tool. Preserve message IDs and correlation IDs. After the
