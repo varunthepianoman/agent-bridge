@@ -65,6 +65,7 @@ agent-bridge reconcile
 agent-bridge candidates
 agent-bridge add <conversation-id>
 agent-bridge chats --query socket
+agent-bridge bio <conversation-id> "Build and deployment specialist"
 agent-bridge message --chat <conversation-id> "Check the server side"
 agent-bridge message --chat <conversation-id> --from-chat <source-id> \
   --request-ack --wait-for acknowledged --timeout 30 "Start the review"
@@ -78,7 +79,8 @@ agent-bridge stop-listener <conversation-id>
 agent-bridge refresh <conversation-id> --wait-seconds 30
 agent-bridge refresh <conversation-id> --wait-seconds 30 --last-message-only
 agent-bridge start --provider codex --cwd /work/project \
-  --model gpt-5.6-sol --effort high "Investigate the failing test"
+  --bio "Diagnoses backend failures" --model gpt-5.6-sol --effort high \
+  "Investigate the failing test"
 agent-bridge turn <conversation-id> --effort xhigh "Re-check the edge cases"
 agent-bridge attention
 agent-bridge wait-attention --max-wait-seconds 3600
@@ -89,6 +91,12 @@ agent-bridge nats
 configured defaults apply. An existing conversation's effort can be changed only through an
 explicit `turn --effort`; ordinary Bridge messages never change it. Bridge intentionally does not
 support changing a conversation's model after launch.
+
+Each conversation has a Bridge-owned public directory `bio` of up to 500 characters. It appears in
+`list_conversations`, API list/detail/candidate/import responses, CLI output, and the web directory,
+and it is included in full-text search. Use MCP `set_conversation_bio`, CLI `agent-bridge bio`, or
+the web detail editor to set or clear it. Bios summarize what an agent is useful for; `notes` remain
+long-form internal metadata. Provider reconciliation never changes either field.
 
 `message` appends to the recipient's durable mailbox and normally returns after Hub acceptance. It
 never resumes, wakes, or steers the provider task. A sender can opt into a bounded foreground wait

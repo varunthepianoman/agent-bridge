@@ -10,6 +10,7 @@ import {
   sendCoreMessage,
   sendProviderTurn,
   stopMailboxListener,
+  updateConversationBio,
   waitForMessageReceipt,
 } from "./api";
 
@@ -26,6 +27,19 @@ describe("conversation core API", () => {
     vi.stubGlobal("fetch", fetch);
     await coreConversations("socket race");
     expect(fetch.mock.calls[0][0]).toContain("/conversations?q=socket+race");
+  });
+
+  it("updates a public directory bio", async () => {
+    const fetch = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify({ conversation_id: "chat/1", bio: "Build expert" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    await updateConversationBio("chat/1", "Build expert");
+    expect(fetch.mock.calls[0][0]).toBe("/api/v1/conversations/chat%2F1");
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ bio: "Build expert" });
   });
 
   it("selects candidates and sends conversation messages", async () => {

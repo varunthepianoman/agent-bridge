@@ -58,6 +58,13 @@ export function coreConversation(id: string): Promise<CoreConversation> {
   return request(`/conversations/${encodeURIComponent(id)}`);
 }
 
+export function updateConversationBio(id: string, bio: string): Promise<CoreConversation> {
+  return request(`/conversations/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ bio }),
+  });
+}
+
 export function openCoreConversation(
   id: string,
   target: "desktop" | "terminal",

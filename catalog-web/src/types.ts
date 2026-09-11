@@ -23,6 +23,7 @@ export interface CoreConversation {
   conversation_number?: number;
   display_name: string;
   alias: string;
+  bio: string;
   provider: string;
   provider_title?: string;
   provider_thread_id: string;

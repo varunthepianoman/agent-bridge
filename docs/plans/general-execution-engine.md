@@ -63,6 +63,9 @@ single-user broker principal.
 - `provider_title` remains provider-owned.
 - `alias` is the Bridge display name. Human edits and actual provider title changes use
   last-writer-wins semantics.
+- `bio` is a Bridge-owned, searchable public capability summary (500 characters maximum).
+  Provider reconciliation never overwrites it. Long-form operational context belongs in private
+  `notes`, not the directory bio.
 - The primary label is `Chat N · alias`; internal hashes are not shown as short IDs.
 - Discovery creates candidates. **Add → Select all current** selects only the current candidate
   set; future conversations are never silently selected.
@@ -131,7 +134,7 @@ or reconciliation issues, message/correlation identifiers, and JSON export.
 | Select current chats | Add dialog / Select all current | `agent-bridge add …` | — | — | candidate IDs become selected and receive numbers |
 | Search/list chats | directory | `agent-bridge chats` | `list_conversations` | provider-local only | Hub FTS and filters |
 | Inspect a chat | detail pane | `agent-bridge show` | `get_conversation` | native transcript | selected projection |
-| Rename/annotate | conversation detail | `agent-bridge rename` | — | provider title edit | alias metadata API |
+| Rename/set bio | conversation detail | `agent-bridge rename` / `agent-bridge bio` | `set_conversation_bio` | provider title edit | Bridge-owned metadata API |
 | Open native chat | Open native | `agent-bridge open` | `open_conversation` | already native | local launch or fenced remote command |
 | Send direct mail | mailbox composer | `agent-bridge message --chat` | `send_message` | — | durable mailbox append; never a provider turn |
 | Send room mail | room composer | `agent-bridge message --room` | `send_message` | — | NATS room → mailbox/notify/digest members |

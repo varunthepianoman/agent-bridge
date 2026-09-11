@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bell,
@@ -42,8 +42,9 @@ import {
   sendProviderTurn,
   stopMailboxListener,
   updateCatalogSettings,
+  updateConversationBio,
 } from "./api";
-import type { BridgeMessage, MailboxSnapshot } from "./types";
+import type { BridgeMessage, CoreConversation, MailboxSnapshot } from "./types";
 
 type Section = "conversations" | "attention" | "messages" | "rooms" | "nodes" | "nats";
 
@@ -155,10 +156,11 @@ export function App() {
       {section === "conversations" && <>
         <header className="page-head"><div><h1>Conversations</h1><p>Your selected Codex and Claude chats across every machine.</p></div><div className="head-actions"><label className="auto-add"><input type="checkbox" checked={preferences.data?.auto_add_new_chats ?? false} disabled={!preferences.data || updatePreferences.isPending} onChange={(event) => updatePreferences.mutate({ auto_add_new_chats: event.target.checked })} /> Auto-add new chats</label><button onClick={() => reconcile.mutate()}><RefreshCw size={16} /> Reconcile</button><button className="primary" onClick={() => setAdding(true)}><Plus size={16} /> Add chats</button></div></header>
         <div className="conversation-layout">
-          <section className="directory-pane"><label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search alias, title, project, machine…" /></label>
-            <div className="chat-list">{conversations.data?.items.map((chat) => <button key={chat.conversation_id} className={selected === chat.conversation_id ? "chat-card selected" : "chat-card"} onClick={() => { setSelected(chat.conversation_id); setOpenFeedback(undefined); }}><span className={`provider ${chat.provider}`}>{providerBadge(chat.provider)}</span><span><strong>{chat.display_name}</strong><small>{chat.provider} · {chat.node_id}/{chat.environment_id}</small><em>{chat.preview || "No preview available"}</em></span><i className={`state ${chat.status}`} /></button>)}</div>
+          <section className="directory-pane"><label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search bios, aliases, transcripts, notes…" /></label>
+            <div className="chat-list">{conversations.data?.items.map((chat) => <button key={chat.conversation_id} className={selected === chat.conversation_id ? "chat-card selected" : "chat-card"} onClick={() => { setSelected(chat.conversation_id); setOpenFeedback(undefined); }}><span className={`provider ${chat.provider}`}>{providerBadge(chat.provider)}</span><span><strong>{chat.display_name}</strong><small>{chat.provider} · {chat.node_id}/{chat.environment_id}</small><em>{conversationCardSummary(chat)}</em></span><i className={`state ${chat.status}`} /></button>)}</div>
           </section>
-          <section className="detail-pane">{detail.data ? <><div className="detail-title"><div><span className="eyebrow">{detail.data.provider} · {detail.data.conversation_kind.replace("_", " ")}</span><h2>{detail.data.display_name}</h2><p>{detail.data.provider_title && detail.data.provider_title !== detail.data.alias ? `Provider title: ${detail.data.provider_title}` : detail.data.cwd}</p></div><div className="open-actions"><button className="primary" disabled={!detail.data.native_url || openNative.isPending} onClick={() => openNative.mutate({ id: detail.data.conversation_id, target: "desktop" })}>Open in {detail.data.provider === "claude" ? "Claude (in dev)" : "Codex"}</button><button disabled={!detail.data.capabilities.can_open || openNative.isPending} onClick={() => openNative.mutate({ id: detail.data.conversation_id, target: "terminal" })}><SquareTerminal size={15} /> Open in Terminal{detail.data.provider === "codex" ? " (in dev)" : ""}</button><button disabled={refreshTranscript.isPending} onClick={() => refreshTranscript.mutate()}><RefreshCw size={15} /> {refreshTranscript.isPending ? "Refreshing…" : "Refresh transcript"}</button></div></div>
+          <section className="detail-pane">{detail.data ? <><div className="detail-title"><div><span className="eyebrow">{detail.data.provider} · {detail.data.conversation_kind.replace("_", " ")}</span><h2>{detail.data.display_name}</h2>{detail.data.bio && <p className="detail-bio">{detail.data.bio}</p>}<p>{detail.data.provider_title && detail.data.provider_title !== detail.data.alias ? `Provider title: ${detail.data.provider_title}` : detail.data.cwd}</p></div><div className="open-actions"><button className="primary" disabled={!detail.data.native_url || openNative.isPending} onClick={() => openNative.mutate({ id: detail.data.conversation_id, target: "desktop" })}>Open in {detail.data.provider === "claude" ? "Claude (in dev)" : "Codex"}</button><button disabled={!detail.data.capabilities.can_open || openNative.isPending} onClick={() => openNative.mutate({ id: detail.data.conversation_id, target: "terminal" })}><SquareTerminal size={15} /> Open in Terminal{detail.data.provider === "codex" ? " (in dev)" : ""}</button><button disabled={refreshTranscript.isPending} onClick={() => refreshTranscript.mutate()}><RefreshCw size={15} /> {refreshTranscript.isPending ? "Refreshing…" : "Refresh transcript"}</button></div></div>
+            <BioEditor conversation={detail.data} />
             {openFeedback && <p className="action-feedback" role="status">{openFeedback}</p>}
             <div className="facts"><span><small>Machine</small>{detail.data.node_id}</span><span><small>Environment</small>{detail.data.environment_id}</span><span><small>Delivery</small>{detail.data.delivery_mode}</span><span><small>Status</small>{detail.data.status}</span></div>
             <pre className="transcript">{detail.data.transcript_text || detail.data.preview || "Transcript will appear after the next reconciliation."}</pre>
@@ -176,6 +178,25 @@ export function App() {
     </main>
     {adding && <div className="modal-backdrop"><div className="modal"><header><div><h2>Add discovered chats</h2><p>Select existing chats here. Auto-add controls chats first discovered later.</p></div><button onClick={() => setAdding(false)}>×</button></header><div className="modal-actions"><button onClick={() => setCandidateSelection(new Set(candidates.data?.items.map((item) => item.conversation_id)))}>Select all current</button><span>{candidateSelection.size} selected</span></div><div className="candidate-list">{candidates.data?.items.map((chat) => <label key={chat.conversation_id}><input type="checkbox" checked={candidateSelection.has(chat.conversation_id)} onChange={() => setCandidateSelection((current) => { const next = new Set(current); next.has(chat.conversation_id) ? next.delete(chat.conversation_id) : next.add(chat.conversation_id); return next; })} /><span><strong>{chat.alias}</strong><small>{chat.provider} · {chat.node_id}/{chat.environment_id}</small></span></label>)}</div><footer><button onClick={() => setAdding(false)}>Cancel</button><button className="primary" disabled={!candidateSelection.size} onClick={() => importMutation.mutate()}>Add {candidateSelection.size || ""} chats</button></footer></div></div>}
   </div>;
+}
+
+export function conversationCardSummary(conversation: CoreConversation) {
+  return conversation.bio || conversation.preview || "No bio or preview available";
+}
+
+export function BioEditor({ conversation }: { conversation: CoreConversation }) {
+  const cache = useQueryClient();
+  const [bio, setBio] = useState(conversation.bio);
+  useEffect(() => setBio(conversation.bio), [conversation.conversation_id, conversation.bio]);
+  const save = useMutation({
+    mutationFn: (value: string) => updateConversationBio(conversation.conversation_id, value),
+    onSuccess: async (updated) => {
+      setBio(updated.bio);
+      cache.setQueryData(["core-conversation", conversation.conversation_id], updated);
+      await cache.invalidateQueries({ queryKey: ["core-conversations"] });
+    },
+  });
+  return <section className="bio-editor"><label htmlFor="conversation-bio"><strong>Public bio</strong><small>{bio.length}/500 · shown to other agents in the directory</small></label><textarea id="conversation-bio" maxLength={500} value={bio} onChange={(event) => setBio(event.target.value)} placeholder="What is this agent useful for?" /><div><button disabled={save.isPending || bio === conversation.bio} onClick={() => save.mutate(bio)}>Save bio</button><button disabled={save.isPending || (!bio && !conversation.bio)} onClick={() => save.mutate("")}>Clear</button>{save.isError && <small role="alert">Could not save the bio.</small>}</div></section>;
 }
 
 function AttentionView() {
