@@ -401,6 +401,7 @@ def test_initial_turn_event_requires_catalog_and_is_idempotent(
                 "workspace": "C:\\dev\\repo",
                 "prompt": "Inspect only",
                 "alias": "Smoke task",
+                "bio": "Remote capability specialist",
             },
         )
         command = client.post(
@@ -439,6 +440,8 @@ def test_initial_turn_event_requires_catalog_and_is_idempotent(
             headers=headers,
         )
         assert result.status_code == 200
+        remote = client.get("/api/v1/conversations").json()["items"][0]
+        assert remote["bio"] == "Remote capability specialist"
 
         first = client.post("/api/v1/node/turn-events", json=event, headers=headers)
         retried = client.post("/api/v1/node/turn-events", json=event, headers=headers)

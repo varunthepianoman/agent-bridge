@@ -508,6 +508,7 @@ async def start_agent(
     cwd: str,
     initial_prompt: str,
     alias: str | None = None,
+    bio: str | None = None,
     node_id: str | None = None,
     environment_id: str | None = None,
     model: str | None = None,
@@ -526,11 +527,29 @@ async def start_agent(
             "cwd": cwd,
             "initial_prompt": initial_prompt,
             "alias": alias,
+            "bio": bio,
             "node_id": node_id,
             "environment_id": environment_id,
             "model": model,
             "effort": effort,
         },
+    )
+
+
+@mcp.tool()
+async def set_conversation_bio(
+    conversation_id: str,
+    bio: str,
+    ctx: Context[Any, Any, Any] | None = None,
+) -> Any:
+    """Set or clear a conversation's public directory bio (maximum 500 characters)."""
+    assert ctx is not None
+    return await _request(
+        ctx,
+        "set_conversation_bio",
+        "PATCH",
+        f"/conversations/{conversation_id}",
+        json={"bio": bio},
     )
 
 

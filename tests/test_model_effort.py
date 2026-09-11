@@ -63,12 +63,14 @@ def test_http_launch_and_explicit_turn_effort_are_separate(tmp_path: Path) -> No
                 "cwd": str(tmp_path),
                 "initial_prompt": "Review the implementation",
                 "alias": "reviewer",
+                "bio": "Reviews implementation details",
                 "model": "gpt-5.6-sol",
                 "effort": "high",
             },
         )
         assert created.status_code == 201
         conversation_id = created.json()["conversation_id"]
+        assert created.json()["bio"] == "Reviews implementation details"
         assert runtime.starts == [
             {
                 "provider": "codex",

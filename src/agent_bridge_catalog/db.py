@@ -46,6 +46,7 @@ class ConversationRow(Base):
     provider_title: Mapped[str | None] = mapped_column(Text)
     preview: Mapped[str] = mapped_column(Text, default="")
     transcript_text: Mapped[str] = mapped_column(Text, default="")
+    bio: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(40), default="idle", index=True)
     source: Mapped[str | None] = mapped_column(String(80))
     cwd: Mapped[str | None] = mapped_column(Text)
@@ -87,6 +88,7 @@ class ConversationRow(Base):
             "alias_updated_at": _iso(self.alias_updated_at),
             "provider_title": self.provider_title,
             "preview": self.preview,
+            "bio": self.bio,
             "status": self.status,
             "source": self.source,
             "cwd": self.cwd,
@@ -860,6 +862,7 @@ class Database:
                     title,
                     preview,
                     transcript_text,
+                    bio,
                     notes,
                     tags
                 )

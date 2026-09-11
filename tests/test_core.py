@@ -169,6 +169,44 @@ def test_alias_tracks_real_provider_title_changes_and_human_edits(tmp_path: Path
         assert changed["alias_updated_by"] == "human"
 
 
+def test_conversation_bio_is_public_searchable_and_provider_owned_fields_do_not_replace_it(
+    tmp_path: Path,
+) -> None:
+    app = create_app(settings=settings(tmp_path), provider=Provider())
+    with TestClient(app) as client:
+        client.post("/api/v1/reconciliation")
+        candidate = client.get("/api/v1/conversations/candidates").json()["items"][0]
+        conversation_id = candidate["conversation_id"]
+        assert candidate["bio"] == ""
+        imported_empty = client.post(
+            "/api/v1/conversations/import", json={"conversation_ids": [conversation_id]}
+        )
+        assert imported_empty.status_code == 200
+        assert imported_empty.json()["items"][0]["bio"] == ""
+
+        changed = client.patch(
+            f"/api/v1/conversations/{conversation_id}",
+            json={"bio": "\n  Diagnoses distributed socket races  \n"},
+        )
+        assert changed.status_code == 200
+        assert changed.json()["bio"] == "Diagnoses distributed socket races"
+        imported = client.get("/api/v1/conversations").json()["items"][0]
+        assert imported["bio"] == "Diagnoses distributed socket races"
+        assert client.get("/api/v1/conversations?q=distributed").json()["total"] == 1
+        detail = client.get(f"/api/v1/conversations/{conversation_id}").json()
+        assert detail["bio"] == imported["bio"]
+
+        client.post("/api/v1/reconciliation")
+        detail = client.get(f"/api/v1/conversations/{conversation_id}").json()
+        assert detail["bio"] == imported["bio"]
+        assert client.patch(
+            f"/api/v1/conversations/{conversation_id}", json={"bio": "x" * 501}
+        ).status_code == 422
+        assert client.patch(
+            f"/api/v1/conversations/{conversation_id}", json={"bio": ""}
+        ).json()["bio"] == ""
+
+
 def test_metadata_only_sync_preserves_transcript_and_derives_bounded_alias(tmp_path: Path) -> None:
     database = Database(f"sqlite:///{tmp_path / 'catalog.db'}")
     database.initialize()

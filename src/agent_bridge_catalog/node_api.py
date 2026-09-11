@@ -196,6 +196,13 @@ def command_result(
                     environment_id=result.get("environment_id", "host"),
                 )
                 row = request.app.state.repository.select([row.conversation_id])[0]
+                bio = result.get("bio")
+                if isinstance(bio, str):
+                    updated = request.app.state.repository.update_metadata(
+                        row.conversation_id, {"bio": bio}
+                    )
+                    assert updated is not None
+                    row = updated
                 request.app.state.attention.create(
                     category="update",
                     kind="agent_started",

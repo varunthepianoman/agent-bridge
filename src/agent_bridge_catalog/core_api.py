@@ -35,6 +35,7 @@ class CandidateImport(Input):
 
 class ConversationPatch(Input):
     alias: str | None = Field(default=None, min_length=1, max_length=500)
+    bio: str | None = Field(default=None, max_length=500)
     notes: str | None = Field(default=None, max_length=20_000)
     tags: list[str] | None = None
     pinned: bool | None = None
@@ -47,6 +48,7 @@ class ConversationCreate(Input):
     cwd: str = Field(min_length=1)
     initial_prompt: str = Field(min_length=1)
     alias: str | None = Field(default=None, min_length=1, max_length=500)
+    bio: str | None = Field(default=None, max_length=500)
     node_id: str | None = None
     environment_id: str | None = None
     model: str | None = Field(default=None, min_length=1, max_length=160)
@@ -365,6 +367,7 @@ async def create_conversation(payload: ConversationCreate, request: Request) -> 
                     "environment_id": environment_id,
                     "prompt": payload.initial_prompt,
                     "alias": payload.alias,
+                    "bio": payload.bio,
                     "model": payload.model,
                     "effort": payload.effort,
                 },
@@ -405,9 +408,10 @@ async def create_conversation(payload: ConversationCreate, request: Request) -> 
         environment_id=environment_id,
     )
     row = _repository(request).select([row.conversation_id])[0]
-    if payload.alias:
+    metadata = payload.model_dump(include={"alias", "bio"}, exclude_none=True)
+    if metadata:
         updated = _repository(request).update_metadata(
-            row.conversation_id, {"alias": payload.alias}
+            row.conversation_id, metadata
         )
         assert updated is not None
         row = updated

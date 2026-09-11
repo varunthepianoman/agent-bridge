@@ -262,7 +262,7 @@ class CatalogRepository:
     def update_metadata(
         self, conversation_id: str, changes: dict[str, Any]
     ) -> ConversationRow | None:
-        allowed = {"alias", "notes", "pinned", "hidden", "archived", "tags"}
+        allowed = {"alias", "bio", "notes", "pinned", "hidden", "archived", "tags"}
         unknown = set(changes) - allowed
         if unknown:
             raise ValueError(f"unsupported metadata fields: {', '.join(sorted(unknown))}")
@@ -278,6 +278,8 @@ class CatalogRepository:
                     row.alias = str(value).strip()
                     row.alias_updated_by = "human"
                     row.alias_updated_at = datetime.now(UTC)
+                elif key == "bio":
+                    row.bio = str(value).strip()
                 else:
                     setattr(row, key, value)
             session.flush()
@@ -293,14 +295,16 @@ class CatalogRepository:
         session.execute(
             text(
                 """INSERT INTO conversation_fts
-                (conversation_id, title, preview, transcript_text, notes, tags)
-                VALUES (:conversation_id, :title, :preview, :transcript_text, :notes, :tags)"""
+                (conversation_id, title, preview, transcript_text, bio, notes, tags)
+                VALUES
+                (:conversation_id, :title, :preview, :transcript_text, :bio, :notes, :tags)"""
             ),
             {
                 "conversation_id": row.conversation_id,
                 "title": " ".join(filter(None, (row.alias, row.provider_title, row.title))),
                 "preview": row.preview,
                 "transcript_text": row.transcript_text,
+                "bio": row.bio,
                 "notes": row.notes,
                 "tags": " ".join(row.tags),
             },

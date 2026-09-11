@@ -11,6 +11,45 @@ from agent_bridge_bridge.cli import run
 from agent_bridge_mcp import server
 
 
+def test_cli_start_and_bio_commands_forward_bios() -> None:
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(201 if request.method == "POST" else 200, json={})
+
+    transport = httpx.MockTransport(handle)
+    assert run(
+        ["start", "--provider", "codex", "--cwd", "/work", "--bio", "Build expert", "Go"],
+        transport=transport,
+    ) == 0
+    assert run(["bio", "conversation-1", "New bio"], transport=transport) == 0
+    assert json.loads(requests[0].content)["bio"] == "Build expert"
+    assert json.loads(requests[1].content) == {"bio": "New bio"}
+
+
+async def test_mcp_start_and_set_bio_forward_bios(monkeypatch: Any) -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def request(
+        _ctx: Any, _tool: str, method: str, path: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls.append((method, path, kwargs))
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "_request", request)
+    await server.start_agent(
+        "codex", "/work", "Go", bio="Build expert", ctx=object()  # type: ignore[arg-type]
+    )
+    await server.set_conversation_bio(
+        "conversation-1", "New bio", ctx=object()  # type: ignore[arg-type]
+    )
+    assert calls[0][2]["json"]["bio"] == "Build expert"
+    assert calls[1] == (
+        "PATCH", "/conversations/conversation-1", {"json": {"bio": "New bio"}}
+    )
+
+
 def test_cli_refresh_can_request_only_the_latest_message() -> None:
     requests: list[httpx.Request] = []
 

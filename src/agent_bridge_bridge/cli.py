@@ -53,6 +53,10 @@ def build_parser() -> argparse.ArgumentParser:
     rename.add_argument("conversation_id")
     rename.add_argument("alias")
 
+    bio = commands.add_parser("bio", help="set or clear a public directory bio")
+    bio.add_argument("conversation_id")
+    bio.add_argument("bio")
+
     message = commands.add_parser("message", help="send a message to a chat or room")
     target = message.add_mutually_exclusive_group(required=True)
     target.add_argument("--chat")
@@ -134,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--cwd", required=True)
     start.add_argument("prompt")
     start.add_argument("--alias")
+    start.add_argument("--bio")
     start.add_argument("--node")
     start.add_argument("--environment")
     start.add_argument("--model")
@@ -221,6 +226,8 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
         )
     if command == "rename":
         return client.patch(f"/conversations/{args.conversation_id}", json={"alias": args.alias})
+    if command == "bio":
+        return client.patch(f"/conversations/{args.conversation_id}", json={"bio": args.bio})
     if command == "message":
         if args.wait_for is not None and args.from_chat is None:
             raise ValueError("--from-chat is required with --wait-for")
@@ -337,6 +344,7 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
                     "cwd": args.cwd,
                     "initial_prompt": args.prompt,
                     "alias": args.alias,
+                    "bio": args.bio,
                     "node_id": args.node,
                     "environment_id": args.environment,
                     "model": args.model,
