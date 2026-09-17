@@ -418,8 +418,30 @@ async def create_conversation(payload: ConversationCreate, request: Request) -> 
     return _conversation_dict(request, row)
 
 
+def _last_messages(request: Request, row: Any, count: int) -> dict[str, Any]:
+    projection = _conversation_dict(request, row, include_transcript=True)
+    messages = projection["raw_metadata"].get("transcript_messages")
+    if messages is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Message boundaries unavailable; resync or refresh from an upgraded node.",
+        )
+    return {
+        "conversation_id": row.conversation_id,
+        "messages": messages[-count:],
+        "message_count": min(count, len(messages)),
+        "has_more": len(messages) > count,
+    }
+
+
 @router.get("/conversations/{conversation_id}")
-def get_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
+def get_conversation(
+    conversation_id: str,
+    request: Request,
+    last_n_messages: int | None = Query(default=None, ge=1, le=500),
+) -> dict[str, Any]:
+    if last_n_messages is not None:
+        return _last_messages(request, _conversation(request, conversation_id), last_n_messages)
     return _conversation_dict(
         request, _conversation(request, conversation_id), include_transcript=True
     )
@@ -432,9 +454,12 @@ async def refresh_conversation(
     response: Response,
     wait_seconds: float = Query(default=0, ge=0, le=60),
     last_message_only: bool = False,
+    last_n_messages: int | None = Query(default=None, ge=1, le=500),
 ) -> dict[str, Any]:
     """Request a read-only projection refresh from the conversation's owning node."""
 
+    if last_message_only and last_n_messages is not None:
+        raise HTTPException(status_code=422, detail="Choose last_message_only or last_n_messages")
     row = _conversation(request, conversation_id)
     if row.provider.casefold() != "codex":
         raise HTTPException(status_code=409, detail="targeted refresh currently supports Codex")
@@ -480,12 +505,16 @@ async def refresh_conversation(
                 "last_message": projection.get("last_assistant_message"),
             }
         refreshed_row = _conversation(request, conversation_id)
+        if last_n_messages is not None:
+            return {
+                "status": "succeeded",
+                "command_id": command["command_id"],
+                **_last_messages(request, refreshed_row, last_n_messages),
+            }
         return {
             "status": "succeeded",
             "command_id": command["command_id"],
-            "conversation": _conversation_dict(
-                request, refreshed_row, include_transcript=True
-            ),
+            "conversation": _conversation_dict(request, refreshed_row, include_transcript=True),
         }
     response.status_code = status.HTTP_202_ACCEPTED
     return {

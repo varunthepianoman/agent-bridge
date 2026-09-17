@@ -49,6 +49,7 @@ class DiscoveredConversation:
     is_ephemeral: bool = False
     is_archived: bool = False
     transcript_text: str = ""
+    transcript_messages: list[dict[str, str]] | None = None
     last_assistant_message: str | None = None
     resume_command: str | None = None
     raw_metadata: Mapping[str, Any] = field(default_factory=dict)
@@ -226,6 +227,10 @@ class CodexCatalogAdapter:
             is_ephemeral=thread.get("ephemeral") is True,
             is_archived=archived,
             transcript_text=_transcript_text(messages),
+            transcript_messages=(
+                [{"role": role, "text": text} for role, text in messages]
+                if isinstance(thread.get("turns"), list) else None
+            ),
             last_assistant_message=next(
                 (text for role, text in reversed(messages) if role == "assistant"),
                 None,

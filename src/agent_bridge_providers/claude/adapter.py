@@ -141,6 +141,15 @@ def _read_session(
         parent_thread_id=parent_thread_id,
         git_branch=branch,
         transcript_text=transcript,
+        transcript_messages=(
+            [
+                {"role": str(item["message"]["role"]), "text": text}
+                for item in messages
+                if (text := "\n\n".join(_prose([item], roles={"user", "assistant"})))
+            ]
+            if include_turns
+            else None
+        ),
         resume_command=resume_command,
         raw_metadata=raw,
     )

@@ -149,6 +149,44 @@ message while still refreshing and storing the complete sanitized transcript. A 
 assistant message returns `last_message: null`. See
 [ADR 0004](docs/adr/0004-durable-mailbox-and-foreground-listener.md).
 
+### Read the last N messages
+
+Use `last_n_messages` (1–500) on `get_conversation` or `refresh_conversation`:
+
+```bash
+agent-bridge show conv-… --last-n-messages 5
+agent-bridge refresh conv-… --last-n-messages 5
+agent-bridge refresh conv-… --last-message-only
+```
+
+HTTP equivalents are `GET /api/v1/conversations/{id}?last_n_messages=5` and
+`POST /api/v1/conversations/{id}/refresh?last_n_messages=5&wait_seconds=10`.
+The MCP tools accept `last_n_messages=5`; refresh also accepts `last_message_only=true`.
+Choose only one refresh selector. The latest-only selector means the latest **assistant**
+reply; last-N counts both user and assistant prose messages, including assistant progress
+messages, and returns them oldest to newest. Tool output and reasoning are excluded.
+
+Last-N responses contain `conversation_id`, `messages` (`role` and `text`), `message_count`,
+and `has_more`. Successful refresh adds `status` and `command_id`. They omit full transcript,
+preview, and raw metadata so old history is not repeated. Omitting the selector preserves the
+existing full response. A queued refresh still returns HTTP 202 and its command ID; after it
+finishes, read with `show --last-n-messages` / `get_conversation(last_n_messages=...)`.
+
+Message boundaries are retained at discovery/refresh time, not inferred from flattened text.
+Upgrade the owning node and resync or refresh existing conversations before using last-N.
+Older projections without message boundaries return HTTP 409 with an upgrade/resync instruction;
+no schema migration is needed. Stored reads support Codex and Claude; remote refresh remains
+Codex-only. A successfully collected empty conversation returns an empty messages list.
+
+### App connector schema updates
+
+The app connector's configured tunnel launches `agent-bridge-mcp`, the same server as direct MCP.
+Its `tools/list` schema exposes both `last_n_messages` and refresh's `last_message_only`.
+After upgrading, reload the tunnel's MCP process when its requests are idle. Then refresh the
+connector's tool definitions in the client if it still advertises the old parameter list;
+already-open sessions may retain their old tool schema. Updating Hub code alone does not refresh
+cached connector definitions. This requires no conversation resume or writer acquisition.
+
 ## Configuration
 
 | Variable | Purpose | Default |

@@ -12,11 +12,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.fastmcp.server import Settings as FastMCPSettings
+from pydantic import Field
 
 logger = logging.getLogger(__name__)
 
@@ -223,11 +224,19 @@ async def list_conversations(
 
 @mcp.tool()
 async def get_conversation(
-    conversation_id: str, ctx: Context[Any, Any, Any] | None = None
+    conversation_id: str,
+    ctx: Context[Any, Any, Any] | None = None,
+    last_n_messages: Annotated[int | None, Field(ge=1, le=500)] = None,
 ) -> Any:
-    """Read one selected conversation, including its current transcript projection."""
+    """Read stored transcript, or newest 1–500 user/assistant messages in chronological order."""
     assert ctx is not None
-    return await _request(ctx, "get_conversation", "GET", f"/conversations/{conversation_id}")
+    return await _request(
+        ctx,
+        "get_conversation",
+        "GET",
+        f"/conversations/{conversation_id}",
+        params={} if last_n_messages is None else {"last_n_messages": last_n_messages},
+    )
 
 
 @mcp.tool()
@@ -235,9 +244,10 @@ async def refresh_conversation(
     conversation_id: str,
     wait_seconds: float = 10,
     last_message_only: bool = False,
+    last_n_messages: Annotated[int | None, Field(ge=1, le=500)] = None,
     ctx: Context[Any, Any, Any] | None = None,
 ) -> Any:
-    """Safely refresh a remote Codex transcript, optionally returning its latest reply only."""
+    """Refresh without a writer; return full transcript, latest reply, or last N messages."""
     assert ctx is not None
     return await _request(
         ctx,
@@ -247,6 +257,7 @@ async def refresh_conversation(
         params={
             "wait_seconds": wait_seconds,
             "last_message_only": last_message_only,
+            **({"last_n_messages": last_n_messages} if last_n_messages is not None else {}),
         },
     )
 

@@ -232,7 +232,7 @@ def redact_sensitive(value: Any) -> Any:
 
 
 def _strip_transcript_payload(value: dict[str, Any]) -> dict[str, Any]:
-    transcript_keys = {"turns", "messages", "transcript", "transcript_text"}
+    transcript_keys = {"turns", "messages", "transcript", "transcript_text", "transcript_messages"}
     result: dict[str, Any] = {}
     for key, item in value.items():
         if key.casefold() in transcript_keys:

@@ -113,7 +113,23 @@ class CatalogRepository:
                 provider, thread_id, row.cwd
             )
             row.last_synced_at = now
-            raw = payload.get("raw_metadata", payload)
+            raw = dict(payload.get("raw_metadata", payload))
+            raw.pop("transcript_messages", None)
+            if row.selected and transcript_included:
+                messages = payload.get("transcript_messages")
+                if isinstance(messages, list) and all(
+                    isinstance(item, dict)
+                    and item.get("role") in ("user", "assistant")
+                    and isinstance(item.get("text"), str)
+                    for item in messages
+                ):
+                    raw["transcript_messages"] = [
+                        {"role": item["role"], "text": item["text"]} for item in messages
+                    ]
+            elif row.selected:
+                previous = json.loads(row.raw_metadata_json or "{}")
+                if "transcript_messages" in previous:
+                    raw["transcript_messages"] = previous["transcript_messages"]
             row.raw_metadata_json = json.dumps(raw, default=str, separators=(",", ":"))
             session.flush()
             self._refresh_fts(session, row)
@@ -248,6 +264,9 @@ class CatalogRepository:
                 return False
             row.selected = False
             row.transcript_text = ""
+            raw = json.loads(row.raw_metadata_json or "{}")
+            raw.pop("transcript_messages", None)
+            row.raw_metadata_json = json.dumps(raw)
             session.execute(
                 text("DELETE FROM conversation_fts WHERE conversation_id = :conversation_id"),
                 {"conversation_id": conversation_id},

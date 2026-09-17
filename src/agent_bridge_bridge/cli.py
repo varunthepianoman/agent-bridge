@@ -43,11 +43,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     show = commands.add_parser("show", help="show one selected conversation")
     show.add_argument("conversation_id")
+    show.add_argument("--last-n-messages", type=int)
 
     refresh = commands.add_parser("refresh", help="refresh a remote Codex transcript safely")
     refresh.add_argument("conversation_id")
     refresh.add_argument("--wait-seconds", type=float, default=10.0)
-    refresh.add_argument("--last-message-only", action="store_true")
+    selection = refresh.add_mutually_exclusive_group()
+    selection.add_argument("--last-message-only", action="store_true")
+    selection.add_argument("--last-n-messages", type=int)
 
     rename = commands.add_parser("rename", help="set a Bridge alias")
     rename.add_argument("conversation_id")
@@ -219,13 +222,21 @@ def _request(client: httpx.Client, args: argparse.Namespace) -> httpx.Response:
     if command == "remove":
         return client.delete(f"/conversations/{args.conversation_id}")
     if command == "show":
-        return client.get(f"/conversations/{args.conversation_id}")
+        return client.get(
+            f"/conversations/{args.conversation_id}",
+            params=_without_none({"last_n_messages": args.last_n_messages}),
+        )
     if command == "refresh":
         return client.post(
             f"/conversations/{args.conversation_id}/refresh",
             params={
                 "wait_seconds": args.wait_seconds,
                 "last_message_only": args.last_message_only,
+                **(
+                    {"last_n_messages": args.last_n_messages}
+                    if args.last_n_messages is not None
+                    else {}
+                ),
             },
         )
     if command == "rename":

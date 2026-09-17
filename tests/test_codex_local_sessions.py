@@ -66,3 +66,6 @@ def test_local_fallback_indexes_only_user_and_agent_prose(tmp_path: Path) -> Non
     assert "Find the reconnect bug" in records[0].transcript_text
     assert "generation counter" in records[0].transcript_text
     assert "SECRET OUTPUT" not in records[0].transcript_text
+    assert records[0].transcript_messages
+    assert records[0].transcript_messages[0]["role"] == "user"
+    assert "SECRET OUTPUT" not in str(records[0].transcript_messages)

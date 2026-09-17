@@ -233,6 +233,7 @@ class NodeStore:
             sanitized.pop("environment_id", None)
             if not policy.include_transcript_text:
                 sanitized["transcript_text"] = ""
+                sanitized.pop("transcript_messages", None)
             self.repository.upsert_discovered(
                 sanitized,
                 node_id=registration.node_id,

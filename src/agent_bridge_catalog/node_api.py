@@ -243,6 +243,7 @@ _READ_PROJECTION_FIELDS = {
     "is_pinned",
     "is_ephemeral",
     "transcript_text",
+    "transcript_messages",
 }
 
 

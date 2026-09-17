@@ -369,4 +369,7 @@ def _serialize(item: DiscoveredItem, rules: ExclusionRules, environment_id: str)
         "is_ephemeral": item.is_ephemeral,
         "is_archived": item.is_archived,
         "transcript_text": item.transcript_text if rules.include_transcripts else "",
+        "transcript_messages": (
+            getattr(item, "transcript_messages", None) if rules.include_transcripts else None
+        ),
     }

@@ -27,6 +27,10 @@ async def test_discovers_root_and_native_subagent_without_tool_content() -> None
     assert "Find the reconnect bug" in root.transcript_text
     assert "session generation is stale" in root.transcript_text
     assert "SECRET_TOOL_OUTPUT" not in root.transcript_text
+    assert root.transcript_messages
+    assert root.transcript_messages[0]["role"] == "user"
+    assert "SECRET_TOOL_OUTPUT" not in str(root.transcript_messages)
+    assert "SECRET_REASONING" not in str(child.transcript_messages)
     assert child.parent_thread_id == "session-root"
     assert child.source_kind == "subAgent"
     assert child.title == "Audit the plan"

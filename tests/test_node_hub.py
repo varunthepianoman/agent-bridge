@@ -737,6 +737,10 @@ def test_refresh_validates_identity_then_updates_sanitized_projection(tmp_path: 
                 "status": "active",
                 "transcript_text": "user: status\nassistant: still running",
                 "last_assistant_message": "still running",
+                "transcript_messages": [
+                    {"role": "user", "text": "status"},
+                    {"role": "assistant", "text": "still running"},
+                ],
                 "tool_output": "must be discarded",
                 "reasoning": "must be discarded",
             },
@@ -807,6 +811,22 @@ def test_refresh_validates_identity_then_updates_sanitized_projection(tmp_path: 
                 "command_id": latest_command["command_id"],
                 "last_message": "still running",
             }
+
+            tail_future = pool.submit(
+                client.post, refresh_url,
+                params={"wait_seconds": 5, "last_n_messages": 1},
+            )
+            tail_command = claim_refresh()
+            assert client.post(
+                f"/api/v1/node/commands/{tail_command['command_id']}/result",
+                json={"node_id": "new-node", "claim_token": tail_command["claim_token"],
+                      "status": "succeeded", "output": base_output}, headers=headers,
+            ).status_code == 200
+            tail = tail_future.result(timeout=10)
+            assert tail.status_code == 200
+            assert tail.json()["messages"] == [{"role": "assistant", "text": "still running"}]
+            assert tail.json()["has_more"] is True
+            assert "raw_metadata" not in tail.json()
 
         refreshed = client.get(f"/api/v1/conversations/{conversation_id}").json()
         assert refreshed["title"] == "After refresh"

@@ -117,6 +117,9 @@ class LocalCodexSessionReader:
             git_origin_url=_string(git.get("repository_url", git.get("originUrl"))),
             is_archived=archived,
             transcript_text="\n".join(f"{role}: {text}" for role, text in messages),
+            transcript_messages=(
+                [{"role": role, "text": text} for role, text in messages] if include_turns else None
+            ),
             raw_metadata={
                 "originator": metadata.get("originator"),
                 "cli_version": metadata.get("cli_version"),
