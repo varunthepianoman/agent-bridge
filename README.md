@@ -231,3 +231,13 @@ npm run typecheck
 npm test -- --run
 npm run build
 ```
+
+## License
+
+Agent Bridge is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+Noncommercial use and the other purposes expressly permitted by that license are allowed.
+Commercial use outside those permissions requires a separate commercial license from the
+copyright holder. Contact the [repository owner](https://github.com/varunthepianoman) to
+discuss commercial licensing.
+
+Third-party dependencies remain subject to their respective licenses.
